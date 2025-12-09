@@ -3,11 +3,12 @@ import { Appointment } from '../../domain/entities/Appointment.js';
 /**
  * Schedule Appointment Use Case - Application Layer
  * Handles the business logic for scheduling new appointments
- *
+ * 
  * Business Rules:
  * - Only one active appointment per phone number
- * - Must include service type (corte, barba, corte_barba)
+ * - Must include barber, service type
  * - Appointment date must be in the future
+ * - Slot must be available for the selected barber
  */
 export class ScheduleAppointment {
   #appointmentRepository;
@@ -18,7 +19,7 @@ export class ScheduleAppointment {
     this.#messagingService = messagingService;
   }
 
-  async execute({ phoneNumber, customerName, serviceType, dateTime }) {
+  async execute({ phoneNumber, customerName, barberId, barberName, serviceType, dateTime }) {
     // Check for existing active appointment
     const hasActive = await this.#appointmentRepository.hasActiveAppointment(phoneNumber);
     
@@ -49,16 +50,30 @@ export class ScheduleAppointment {
       return null;
     }
 
+    // Verify slot is still available
+    const isAvailable = await this.#appointmentRepository.isSlotAvailable(barberId, dateTime);
+    if (!isAvailable) {
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        body: 'Este horario ya no está disponible. Por favor selecciona otro.',
+        buttons: [
+          { id: 'btn_agendar', title: 'Intentar de nuevo' },
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
+      return null;
+    }
+
     const appointment = new Appointment({
       phoneNumber,
       customerName,
+      barberId,
       serviceType,
       dateTime
     });
 
     await this.#appointmentRepository.save(appointment);
     
-    await this.#messagingService.sendConfirmation(phoneNumber, appointment);
+    await this.#messagingService.sendConfirmation(phoneNumber, appointment, barberName);
 
     return appointment;
   }

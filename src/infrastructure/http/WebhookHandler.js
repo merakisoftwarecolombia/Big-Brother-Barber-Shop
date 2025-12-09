@@ -3,22 +3,32 @@ import { Appointment } from '../../domain/entities/Appointment.js';
 /**
  * Webhook Handler - Infrastructure Layer
  * Handles incoming WhatsApp webhook events including interactive messages
+ * 
+ * Booking Flow:
+ * 1. Name input (text)
+ * 2. Barber selection (list)
+ * 3. Service selection (list)
+ * 4. Date selection (list with availability)
+ * 5. Time selection (list with available slots)
+ * 6. Confirmation
  */
 export class WebhookHandler {
   #scheduleAppointment;
   #cancelAppointment;
   #listAppointments;
   #messagingService;
+  #appointmentRepository;
   #conversationState = new Map();
   #conversationTimers = new Map();
   #welcomedUsers = new Set();
   #inactivityTimeout = 10 * 60 * 1000; // 10 minutes
 
-  constructor({ scheduleAppointment, cancelAppointment, listAppointments, messagingService }) {
+  constructor({ scheduleAppointment, cancelAppointment, listAppointments, messagingService, appointmentRepository }) {
     this.#scheduleAppointment = scheduleAppointment;
     this.#cancelAppointment = cancelAppointment;
     this.#listAppointments = listAppointments;
     this.#messagingService = messagingService;
+    this.#appointmentRepository = appointmentRepository;
   }
 
   #resetInactivityTimer(phoneNumber) {
@@ -65,7 +75,7 @@ export class WebhookHandler {
     try {
       this.#resetInactivityTimer(phoneNumber);
 
-      // Handle interactive message responses (buttons and lists)
+      // Handle interactive message responses
       if (message.type === 'interactive') {
         return this.#handleInteractiveResponse(phoneNumber, message.interactive);
       }
@@ -153,6 +163,11 @@ export class WebhookHandler {
       return this.#handleCancel(phoneNumber, appointmentIdPart);
     }
 
+    // Handle barber selection
+    if (buttonId.startsWith('barber_')) {
+      return this.#handleBarberSelection(phoneNumber, buttonId);
+    }
+
     // Handle service selection
     if (buttonId.startsWith('srv_')) {
       return this.#handleServiceSelection(phoneNumber, buttonId);
@@ -190,25 +205,50 @@ export class WebhookHandler {
         );
       }
       
-      // Save name and show service selection
+      // Save name and show barber selection
       state.customerName = text;
-      state.step = 'service';
+      state.step = 'barber';
       this.#conversationState.set(phoneNumber, state);
       
-      return this.#messagingService.sendServiceSelection(phoneNumber, text);
+      // Get all barbers
+      const barbers = await this.#appointmentRepository.findAllBarbers();
+      return this.#messagingService.sendBarberSelection(phoneNumber, barbers, text);
     }
 
-    // For other steps, show menu (shouldn't reach here with interactive flow)
+    // For other steps, show menu
     this.#conversationState.delete(phoneNumber);
     this.#clearInactivityTimer(phoneNumber);
     return this.#messagingService.sendWelcomeMenu(phoneNumber);
+  }
+
+  async #handleBarberSelection(phoneNumber, buttonId) {
+    const state = this.#conversationState.get(phoneNumber);
+    
+    if (!state || state.step !== 'barber') {
+      return this.#startScheduling(phoneNumber);
+    }
+
+    // Extract barber ID (format: barber_barber_carlos -> barber_carlos)
+    const barberId = buttonId.replace('barber_', '');
+    
+    const barber = await this.#appointmentRepository.findBarberById(barberId);
+    if (!barber) {
+      const barbers = await this.#appointmentRepository.findAllBarbers();
+      return this.#messagingService.sendBarberSelection(phoneNumber, barbers, state.customerName);
+    }
+
+    state.barberId = barberId;
+    state.barberName = barber.name;
+    state.step = 'service';
+    this.#conversationState.set(phoneNumber, state);
+
+    return this.#messagingService.sendServiceSelection(phoneNumber, state.customerName);
   }
 
   async #handleServiceSelection(phoneNumber, buttonId) {
     const state = this.#conversationState.get(phoneNumber);
     
     if (!state || state.step !== 'service') {
-      // Start fresh if no state
       return this.#startScheduling(phoneNumber);
     }
 
@@ -227,7 +267,10 @@ export class WebhookHandler {
     state.step = 'date';
     this.#conversationState.set(phoneNumber, state);
 
-    return this.#messagingService.sendDateSelection(phoneNumber);
+    // Get availability for next 7 days
+    const datesWithAvailability = await this.#getAvailabilityForDates(state.barberId, 7);
+    
+    return this.#messagingService.sendDateSelection(phoneNumber, datesWithAvailability, state.barberName);
   }
 
   async #handleDateSelection(phoneNumber, buttonId) {
@@ -239,20 +282,23 @@ export class WebhookHandler {
 
     // Extract date from button ID (format: date_YYYY-MM-DD)
     const dateValue = buttonId.replace('date_', '');
+    const selectedDate = new Date(dateValue + 'T12:00:00');
     
     state.date = dateValue;
     state.step = 'time';
     this.#conversationState.set(phoneNumber, state);
 
+    // Get available slots for this date
+    const availableSlots = await this.#appointmentRepository.getAvailableSlots(state.barberId, selectedDate);
+    
     // Format date for display
-    const dateObj = new Date(dateValue + 'T12:00:00');
-    const dateStr = dateObj.toLocaleDateString('es-CO', {
+    const dateStr = selectedDate.toLocaleDateString('es-CO', {
       weekday: 'long',
       day: 'numeric',
       month: 'long'
     });
 
-    return this.#messagingService.sendTimeSelection(phoneNumber, dateStr);
+    return this.#messagingService.sendTimeSelection(phoneNumber, availableSlots, dateStr, state.barberName);
   }
 
   async #handleTimeSelection(phoneNumber, buttonId) {
@@ -286,16 +332,70 @@ export class WebhookHandler {
       });
     }
 
+    // Verify slot is still available
+    const isAvailable = await this.#appointmentRepository.isSlotAvailable(state.barberId, dateTime);
+    if (!isAvailable) {
+      // Slot was taken, show available slots again
+      const selectedDate = new Date(state.date + 'T12:00:00');
+      const availableSlots = await this.#appointmentRepository.getAvailableSlots(state.barberId, selectedDate);
+      
+      const dateStr = selectedDate.toLocaleDateString('es-CO', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long'
+      });
+
+      await this.#messagingService.sendMessage(
+        phoneNumber,
+        'Este horario ya fue reservado. Por favor selecciona otro:'
+      );
+      
+      return this.#messagingService.sendTimeSelection(phoneNumber, availableSlots, dateStr, state.barberName);
+    }
+
     // Clear state before scheduling
+    const barberName = state.barberName;
     this.#conversationState.delete(phoneNumber);
     this.#clearInactivityTimer(phoneNumber);
     
     await this.#scheduleAppointment.execute({
       phoneNumber,
       customerName: state.customerName,
+      barberId: state.barberId,
+      barberName,
       serviceType: state.serviceType,
       dateTime
     });
+  }
+
+  async #getAvailabilityForDates(barberId, days) {
+    const barber = await this.#appointmentRepository.findBarberById(barberId);
+    if (!barber) {
+      return [];
+    }
+
+    const result = [];
+    const today = new Date();
+    
+    for (let i = 1; i <= days; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
+      date.setHours(0, 0, 0, 0);
+      
+      const allSlots = barber.generateTimeSlots(date);
+      const bookedSlots = await this.#appointmentRepository.getBookedSlots(barberId, date);
+      const bookedTimes = new Set(bookedSlots.map(d => d.getTime()));
+      
+      const availableSlots = allSlots.filter(slot => !bookedTimes.has(slot.dateTime.getTime()));
+      
+      result.push({
+        date,
+        availableSlots: availableSlots.length,
+        totalSlots: allSlots.length
+      });
+    }
+    
+    return result;
   }
 
   async #showAppointments(phoneNumber) {
@@ -306,7 +406,10 @@ export class WebhookHandler {
     }
 
     const apt = appointments[0];
-    return this.#messagingService.sendAppointmentDetails(phoneNumber, apt);
+    const barber = await this.#appointmentRepository.findBarberById(apt.barberId);
+    const barberName = barber ? barber.name : 'Barbero';
+    
+    return this.#messagingService.sendAppointmentDetails(phoneNumber, apt, barberName);
   }
 
   async #handleCancelCommand(phoneNumber, text) {

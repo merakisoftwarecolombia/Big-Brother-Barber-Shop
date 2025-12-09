@@ -48,7 +48,7 @@ if (!config.accessToken || !config.phoneNumberId) {
 }
 
 async function main() {
-  // Infrastructure Layer - Initialize async repository
+  // Infrastructure Layer - Initialize repository
   const appointmentRepository = new SQLiteAppointmentRepository(config.databasePath);
   await appointmentRepository.initialize();
 
@@ -73,12 +73,13 @@ async function main() {
     appointmentRepository
   });
 
-  // Webhook Handler
+  // Webhook Handler - needs repository for barber queries
   const webhookHandler = new WebhookHandler({
     scheduleAppointment,
     cancelAppointment,
     listAppointments,
-    messagingService
+    messagingService,
+    appointmentRepository
   });
 
   // HTTP Server
@@ -89,7 +90,7 @@ async function main() {
   });
 
   // Background task: Process expired appointments every 5 minutes
-  const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const CLEANUP_INTERVAL = 5 * 60 * 1000;
   const cleanupInterval = setInterval(async () => {
     try {
       const processed = await appointmentRepository.processExpiredAppointments();
@@ -126,12 +127,17 @@ async function main() {
   // Start server
   server.start();
 
+  // Log barbers on startup
+  const barbers = await appointmentRepository.findAllBarbers();
+  console.log(`Loaded ${barbers.length} barbers: ${barbers.map(b => b.name).join(', ')}`);
+
   console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║     Big Brother Barber Shop - Appointment System       ║
 ╠════════════════════════════════════════════════════════╣
 ║  Webhook URL: http://localhost:${config.port}/webhook            ║
 ║  Health:      http://localhost:${config.port}/health             ║
+║  Barbers:     ${barbers.length} active                               ║
 ╚════════════════════════════════════════════════════════╝
 `);
 }

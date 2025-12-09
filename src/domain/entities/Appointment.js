@@ -1,12 +1,13 @@
 /**
  * Appointment Entity - Domain Layer
  * Represents a scheduled appointment in the system
- * Primary key: phoneNumber (one appointment per customer)
+ * Links customer to barber with specific date/time
  */
 export class Appointment {
   #id;
   #phoneNumber;
   #customerName;
+  #barberId;
   #serviceType;
   #dateTime;
   #status;
@@ -25,24 +26,30 @@ export class Appointment {
     CORTE_BARBA: 'corte_barba'
   });
 
-  constructor({ id, phoneNumber, customerName, serviceType, dateTime, status, createdAt }) {
-    this.#validate({ phoneNumber, customerName, serviceType, dateTime });
+  static DURATION_MINUTES = 60; // Each appointment is 1 hour
+
+  constructor({ id, phoneNumber, customerName, barberId, serviceType, dateTime, status, createdAt }) {
+    this.#validate({ phoneNumber, customerName, barberId, serviceType, dateTime });
     
     this.#id = id ?? crypto.randomUUID();
     this.#phoneNumber = this.#sanitizePhone(phoneNumber);
     this.#customerName = this.#sanitizeName(customerName);
+    this.#barberId = barberId;
     this.#serviceType = serviceType;
     this.#dateTime = new Date(dateTime);
     this.#status = status ?? Appointment.STATUSES.PENDING;
     this.#createdAt = createdAt ? new Date(createdAt) : new Date();
   }
 
-  #validate({ phoneNumber, customerName, serviceType, dateTime }) {
+  #validate({ phoneNumber, customerName, barberId, serviceType, dateTime }) {
     if (!phoneNumber || typeof phoneNumber !== 'string') {
       throw new Error('Invalid phone number');
     }
     if (!customerName || typeof customerName !== 'string') {
       throw new Error('Invalid customer name');
+    }
+    if (!barberId || typeof barberId !== 'string') {
+      throw new Error('Invalid barber ID');
     }
     if (!serviceType || !Object.values(Appointment.SERVICE_TYPES).includes(serviceType)) {
       throw new Error('Invalid service type');
@@ -85,16 +92,27 @@ export class Appointment {
   get id() { return this.#id; }
   get phoneNumber() { return this.#phoneNumber; }
   get customerName() { return this.#customerName; }
+  get barberId() { return this.#barberId; }
   get serviceType() { return this.#serviceType; }
   get dateTime() { return this.#dateTime; }
   get status() { return this.#status; }
   get createdAt() { return this.#createdAt; }
+
+  /**
+   * Get the end time of this appointment
+   */
+  get endDateTime() {
+    const end = new Date(this.#dateTime);
+    end.setMinutes(end.getMinutes() + Appointment.DURATION_MINUTES);
+    return end;
+  }
 
   toJSON() {
     return {
       id: this.#id,
       phoneNumber: this.#phoneNumber,
       customerName: this.#customerName,
+      barberId: this.#barberId,
       serviceType: this.#serviceType,
       dateTime: this.#dateTime.toISOString(),
       status: this.#status,

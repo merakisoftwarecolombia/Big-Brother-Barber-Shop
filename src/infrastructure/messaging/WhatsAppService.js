@@ -54,11 +54,11 @@ export class WhatsAppService extends MessagingService {
       type: 'button',
       body: { text: body },
       action: {
-        buttons: buttons.map((btn, index) => ({
+        buttons: buttons.map((btn) => ({
           type: 'reply',
           reply: {
             id: btn.id,
-            title: btn.title.substring(0, 20) // Max 20 chars
+            title: btn.title.substring(0, 20)
           }
         }))
       }
@@ -96,7 +96,7 @@ export class WhatsAppService extends MessagingService {
   }
 
   /**
-   * Send interactive list message (for menus with more options)
+   * Send interactive list message
    */
   async sendListMessage(phoneNumber, { body, buttonText, sections, header = null, footer = null }) {
     const url = `https://graph.facebook.com/${this.#apiVersion}/${this.#phoneNumberId}/messages`;
@@ -155,9 +155,7 @@ export class WhatsAppService extends MessagingService {
       messaging_product: 'whatsapp',
       to: phoneNumber,
       type: 'image',
-      image: {
-        link: imageUrl
-      }
+      image: { link: imageUrl }
     };
 
     if (caption) {
@@ -196,8 +194,30 @@ export class WhatsAppService extends MessagingService {
       buttons: [
         { id: 'btn_agendar', title: 'Agendar cita' },
         { id: 'btn_ver_citas', title: 'Ver mi cita' }
-      ],
-      footer: 'Tu barbería de confianza'
+      ]
+    });
+  }
+
+  /**
+   * Send barber selection list
+   */
+  async sendBarberSelection(phoneNumber, barbers, customerName) {
+    const rows = barbers.map(barber => ({
+      id: `barber_${barber.id}`,
+      title: barber.name,
+      description: 'Disponible'
+    }));
+
+    return this.sendListMessage(phoneNumber, {
+      header: '💈 Selecciona tu barbero',
+      body: `Hola ${customerName}, ¿con quién te gustaría atenderte?`,
+      buttonText: 'Ver barberos',
+      sections: [
+        {
+          title: 'Barberos disponibles',
+          rows
+        }
+      ]
     });
   }
 
@@ -207,14 +227,14 @@ export class WhatsAppService extends MessagingService {
   async sendServiceSelection(phoneNumber, customerName) {
     return this.sendListMessage(phoneNumber, {
       header: '💈 Selecciona el servicio',
-      body: `Hola ${customerName}, ¿qué servicio deseas?`,
+      body: `${customerName}, ¿qué servicio deseas?`,
       buttonText: 'Ver servicios',
       sections: [
         {
           title: 'Servicios disponibles',
           rows: [
             { id: 'srv_corte', title: 'Corte de cabello', description: 'Corte clásico o moderno' },
-            { id: 'srv_barba', title: 'Arreglo de barba', description: 'Perfilado y arreglo de barba' },
+            { id: 'srv_barba', title: 'Arreglo de barba', description: 'Perfilado y arreglo' },
             { id: 'srv_corte_barba', title: 'Corte + Barba', description: 'Servicio completo' }
           ]
         }
@@ -223,127 +243,116 @@ export class WhatsAppService extends MessagingService {
   }
 
   /**
-   * Send date selection list (next 7 days)
+   * Send date selection with availability info
+   * @param {string} phoneNumber 
+   * @param {Array<{date: Date, availableSlots: number, totalSlots: number}>} datesWithAvailability 
+   * @param {string} barberName 
    */
-  async sendDateSelection(phoneNumber) {
-    const dates = this.#generateNextDays(7);
+  async sendDateSelection(phoneNumber, datesWithAvailability, barberName) {
+    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
     
+    const rows = datesWithAvailability
+      .filter(d => d.availableSlots > 0)
+      .map(({ date, availableSlots }) => {
+        const dayName = dayNames[date.getDay()];
+        const day = date.getDate();
+        const month = monthNames[date.getMonth()];
+        const dateStr = date.toISOString().split('T')[0];
+        
+        return {
+          id: `date_${dateStr}`,
+          title: `${dayName} ${day} ${month}`,
+          description: `${availableSlots} horario${availableSlots > 1 ? 's' : ''} disponible${availableSlots > 1 ? 's' : ''}`
+        };
+      });
+
+    if (rows.length === 0) {
+      return this.sendButtonMessage(phoneNumber, {
+        body: `Lo sentimos, ${barberName} no tiene disponibilidad en los próximos días.`,
+        buttons: [
+          { id: 'btn_agendar', title: 'Elegir otro barbero' },
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
+    }
+
     return this.sendListMessage(phoneNumber, {
       header: '📅 Selecciona la fecha',
-      body: 'Elige el día para tu cita:',
+      body: `Disponibilidad de ${barberName}:`,
       buttonText: 'Ver fechas',
       sections: [
         {
           title: 'Fechas disponibles',
-          rows: dates.map(date => ({
-            id: `date_${date.value}`,
-            title: date.label,
-            description: date.description
-          }))
+          rows
         }
       ]
     });
   }
 
   /**
-   * Send time selection list
+   * Send time selection with available slots
+   * @param {string} phoneNumber 
+   * @param {Array<{time: string, dateTime: Date}>} availableSlots 
+   * @param {string} dateStr 
+   * @param {string} barberName 
    */
-  async sendTimeSelection(phoneNumber, selectedDate) {
-    const times = this.#generateTimeSlots();
-    
-    // Split times into morning and afternoon sections
-    const morningTimes = times.filter(t => parseInt(t.hour) < 12);
-    const afternoonTimes = times.filter(t => parseInt(t.hour) >= 12);
+  async sendTimeSelection(phoneNumber, availableSlots, dateStr, barberName) {
+    if (availableSlots.length === 0) {
+      return this.sendButtonMessage(phoneNumber, {
+        body: `Lo sentimos, no hay horarios disponibles para esta fecha con ${barberName}.`,
+        buttons: [
+          { id: 'btn_agendar', title: 'Elegir otra fecha' },
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
+    }
+
+    // Group by morning/afternoon
+    const morningSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) < 12);
+    const afternoonSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) >= 12);
     
     const sections = [];
     
-    if (morningTimes.length > 0) {
+    if (morningSlots.length > 0) {
       sections.push({
         title: 'Mañana',
-        rows: morningTimes.map(time => ({
-          id: `time_${time.value}`,
-          title: time.label
-        }))
+        rows: morningSlots.map(slot => {
+          const hour = parseInt(slot.time.split(':')[0]);
+          const displayHour = hour > 12 ? hour - 12 : hour;
+          const ampm = hour >= 12 ? 'PM' : 'AM';
+          return {
+            id: `time_${slot.time}`,
+            title: `${displayHour}:00 ${ampm}`
+          };
+        })
       });
     }
     
-    if (afternoonTimes.length > 0) {
+    if (afternoonSlots.length > 0) {
       sections.push({
         title: 'Tarde',
-        rows: afternoonTimes.map(time => ({
-          id: `time_${time.value}`,
-          title: time.label
-        }))
+        rows: afternoonSlots.map(slot => {
+          const hour = parseInt(slot.time.split(':')[0]);
+          const displayHour = hour > 12 ? hour - 12 : hour;
+          const ampm = hour >= 12 ? 'PM' : 'AM';
+          return {
+            id: `time_${slot.time}`,
+            title: `${displayHour}:00 ${ampm}`
+          };
+        })
       });
     }
 
     return this.sendListMessage(phoneNumber, {
       header: '🕐 Selecciona la hora',
-      body: `Fecha seleccionada: ${selectedDate}\nElige la hora para tu cita:`,
+      body: `${dateStr} con ${barberName}\nCada cita dura 1 hora`,
       buttonText: 'Ver horarios',
       sections
     });
   }
 
-  /**
-   * Generate next N days for date selection
-   */
-  #generateNextDays(count) {
-    const days = [];
-    const today = new Date();
-    
-    const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-    
-    for (let i = 1; i <= count; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
-      
-      const dayName = dayNames[date.getDay()];
-      const day = date.getDate();
-      const month = monthNames[date.getMonth()];
-      
-      // Format: YYYY-MM-DD for value
-      const value = date.toISOString().split('T')[0];
-      
-      days.push({
-        value,
-        label: `${dayName} ${day} ${month}`,
-        description: i === 1 ? 'Mañana' : (i === 2 ? 'Pasado mañana' : '')
-      });
-    }
-    
-    return days;
-  }
-
-  /**
-   * Generate time slots for appointment
-   */
-  #generateTimeSlots() {
-    const slots = [];
-    const startHour = 9; // 9 AM
-    const endHour = 19; // 7 PM
-    
-    for (let hour = startHour; hour < endHour; hour++) {
-      // Full hour
-      slots.push({
-        value: `${hour.toString().padStart(2, '0')}:00`,
-        label: `${hour > 12 ? hour - 12 : hour}:00 ${hour >= 12 ? 'PM' : 'AM'}`,
-        hour: hour.toString()
-      });
-      
-      // Half hour
-      slots.push({
-        value: `${hour.toString().padStart(2, '0')}:30`,
-        label: `${hour > 12 ? hour - 12 : hour}:30 ${hour >= 12 ? 'PM' : 'AM'}`,
-        hour: hour.toString()
-      });
-    }
-    
-    return slots;
-  }
-
-  async sendConfirmation(phoneNumber, appointment) {
+  async sendConfirmation(phoneNumber, appointment, barberName) {
     const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
       weekday: 'long',
       year: 'numeric',
@@ -357,7 +366,7 @@ export class WhatsAppService extends MessagingService {
 
     return this.sendButtonMessage(phoneNumber, {
       header: '💈 Cita Confirmada',
-      body: `Hola ${appointment.customerName}!\n\nTu cita ha sido agendada:\n\n📅 ${dateStr}\n💇 ${serviceLabel}\n\nID: ${appointment.id.substring(0, 8)}`,
+      body: `Hola ${appointment.customerName}!\n\nTu cita ha sido agendada:\n\n📅 ${dateStr}\n💇 ${serviceLabel}\n👤 Barbero: ${barberName}\n\nID: ${appointment.id.substring(0, 8)}`,
       buttons: [
         { id: `cancel_${appointment.id.substring(0, 8)}`, title: 'Cancelar cita' },
         { id: 'btn_menu', title: 'Menú principal' }
@@ -365,7 +374,7 @@ export class WhatsAppService extends MessagingService {
     });
   }
 
-  async sendAppointmentDetails(phoneNumber, appointment) {
+  async sendAppointmentDetails(phoneNumber, appointment, barberName) {
     const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
       weekday: 'long',
       day: 'numeric',
@@ -378,7 +387,7 @@ export class WhatsAppService extends MessagingService {
 
     return this.sendButtonMessage(phoneNumber, {
       header: '💈 Tu Cita',
-      body: `📅 ${dateStr}\n💇 ${serviceLabel}\n\nID: ${appointment.id.substring(0, 8)}`,
+      body: `📅 ${dateStr}\n💇 ${serviceLabel}\n👤 Barbero: ${barberName}\n\nID: ${appointment.id.substring(0, 8)}`,
       buttons: [
         { id: `cancel_${appointment.id.substring(0, 8)}`, title: 'Cancelar cita' },
         { id: 'btn_menu', title: 'Menú principal' }
@@ -386,7 +395,7 @@ export class WhatsAppService extends MessagingService {
     });
   }
 
-  async sendReminder(phoneNumber, appointment) {
+  async sendReminder(phoneNumber, appointment, barberName) {
     const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
       weekday: 'long',
       month: 'long',
@@ -401,7 +410,8 @@ export class WhatsAppService extends MessagingService {
       `Hola ${appointment.customerName}!\n\n` +
       `Te recordamos tu cita:\n\n` +
       `📅 ${dateStr}\n` +
-      `💇 ${serviceLabel}\n\n` +
+      `💇 ${serviceLabel}\n` +
+      `👤 Barbero: ${barberName}\n\n` +
       `¡Te esperamos!`;
 
     return this.sendMessage(phoneNumber, message);
