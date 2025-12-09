@@ -194,7 +194,8 @@ export class WhatsAppService extends MessagingService {
       buttons: [
         { id: 'btn_agendar', title: 'Agendar cita' },
         { id: 'btn_ver_citas', title: 'Ver mi cita' }
-      ]
+      ],
+      footer: 'Desarrollado por Meraki • meraki.com'
     });
   }
 
