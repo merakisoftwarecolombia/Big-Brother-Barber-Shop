@@ -9,6 +9,7 @@ export class WebhookHandler {
   #messagingService;
   #conversationState = new Map();
   #conversationTimers = new Map();
+  #welcomedUsers = new Set(); // Track users who have received the welcome image
   #inactivityTimeout = 10 * 60 * 1000; // 10 minutes in milliseconds
 
   constructor({ scheduleAppointment, cancelAppointment, listAppointments, messagingService }) {
@@ -38,11 +39,12 @@ export class WebhookHandler {
     if (this.#conversationState.has(phoneNumber)) {
       this.#conversationState.delete(phoneNumber);
       this.#conversationTimers.delete(phoneNumber);
+      this.#welcomedUsers.delete(phoneNumber); // Reset welcome status so they get image again next time
       
-      const closeMessage = `⏰ *Sesión cerrada por inactividad*\n\n` +
+      const closeMessage = `*Sesión cerrada por inactividad*\n\n` +
         `Han pasado 10 minutos sin actividad.\n\n` +
-        `💈 ¡Gracias por contactar a *Big Brother Barber Shop*! 💈\n\n` +
-        `Escribe *hola* cuando quieras volver a agendar. ✂️`;
+        `💈 Gracias por contactar a *Big Brother Barber Shop*\n\n` +
+        `Escribe *hola* cuando quieras volver a agendar.`;
       
       try {
         await this.#messagingService.sendMessage(phoneNumber, closeMessage);
@@ -66,6 +68,14 @@ export class WebhookHandler {
     try {
       // Reset inactivity timer on any message
       this.#resetInactivityTimer(phoneNumber);
+
+      // Check if this is a new user or first message - send welcome image and menu
+      const isFirstMessage = !this.#welcomedUsers.has(phoneNumber) && !this.#conversationState.has(phoneNumber);
+      
+      if (isFirstMessage) {
+        this.#welcomedUsers.add(phoneNumber);
+        return this.#sendWelcomeWithImage(phoneNumber);
+      }
 
       if (text === 'hola' || text === 'menu' || text === 'inicio') {
         this.#clearInactivityTimer(phoneNumber);
@@ -99,12 +109,12 @@ export class WebhookHandler {
       console.error('Error handling message:', error.message);
       return this.#messagingService.sendMessage(
         phoneNumber,
-        '❌ Ocurrió un error. Por favor intenta de nuevo.'
+        'Ocurrió un error. Por favor intenta de nuevo.'
       );
     }
   }
 
-  async #sendMenu(phoneNumber) {
+  async #sendWelcomeWithImage(phoneNumber) {
     // Enviar imagen de bienvenida primero
     try {
       const imageUrl = this.#messagingService.getImageUrl('barbershop.png');
@@ -116,12 +126,22 @@ export class WebhookHandler {
     }
 
     // Mensaje de bienvenida personalizado para Big Brother Barber Shop
-    const menu = `💈✂️ *¡Bienvenido a Big Brother Barber Shop!* ✂️💈\n\n` +
-      `🪒 Tu barbería de confianza 🪒\n\n` +
+    const menu = `💈 *¡Bienvenido a Big Brother Barber Shop!* 💈\n\n` +
       `¿Qué te gustaría hacer hoy?\n\n` +
-      `*1.* ✂️ Agendar una cita\n` +
-      `*2.* 📋 Ver mis citas\n\n` +
-      `_Escribe el número de la opción que deseas_ 👇`;
+      `*1.* Agendar una cita\n` +
+      `*2.* Ver mis citas\n\n` +
+      `_Escribe el número de la opción que deseas_`;
+    
+    return this.#messagingService.sendMessage(phoneNumber, menu);
+  }
+
+  async #sendMenu(phoneNumber) {
+    // Mensaje de menú sin imagen (para usuarios que ya recibieron la bienvenida)
+    const menu = `💈 *Big Brother Barber Shop* 💈\n\n` +
+      `¿Qué te gustaría hacer?\n\n` +
+      `*1.* Agendar una cita\n` +
+      `*2.* Ver mis citas\n\n` +
+      `_Escribe el número de la opción que deseas_`;
     
     return this.#messagingService.sendMessage(phoneNumber, menu);
   }
@@ -131,7 +151,7 @@ export class WebhookHandler {
     this.#resetInactivityTimer(phoneNumber);
     return this.#messagingService.sendMessage(
       phoneNumber,
-      '✂️ *Agendar Cita en Big Brother Barber Shop* ✂️\n\n📝 Por favor, escribe tu *nombre completo*:'
+      '💈 *Agendar Cita en Big Brother Barber Shop*\n\nPor favor, escribe tu *nombre completo*:'
     );
   }
 
@@ -143,7 +163,7 @@ export class WebhookHandler {
         this.#conversationState.set(phoneNumber, state);
         return this.#messagingService.sendMessage(
           phoneNumber,
-          '📅 Escribe la *fecha* de tu cita (formato: DD/MM/YYYY):'
+          'Escribe la *fecha* de tu cita (formato: DD/MM/YYYY):'
         );
 
       case 'date':
@@ -151,7 +171,7 @@ export class WebhookHandler {
         if (!dateMatch) {
           return this.#messagingService.sendMessage(
             phoneNumber,
-            '❌ Formato inválido. Usa DD/MM/YYYY (ej: 25/12/2024)'
+            'Formato inválido. Usa DD/MM/YYYY (ej: 25/12/2024)'
           );
         }
         state.date = `${dateMatch[3]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[1].padStart(2, '0')}`;
@@ -159,7 +179,7 @@ export class WebhookHandler {
         this.#conversationState.set(phoneNumber, state);
         return this.#messagingService.sendMessage(
           phoneNumber,
-          '🕐 Escribe la *hora* de tu cita (formato: HH:MM, ej: 14:30):'
+          'Escribe la *hora* de tu cita (formato: HH:MM, ej: 14:30):'
         );
 
       case 'time':
@@ -167,7 +187,7 @@ export class WebhookHandler {
         if (!timeMatch) {
           return this.#messagingService.sendMessage(
             phoneNumber,
-            '❌ Formato inválido. Usa HH:MM (ej: 14:30)'
+            'Formato inválido. Usa HH:MM (ej: 14:30)'
           );
         }
         
@@ -178,7 +198,7 @@ export class WebhookHandler {
           this.#clearInactivityTimer(phoneNumber);
           return this.#messagingService.sendMessage(
             phoneNumber,
-            '❌ La fecha/hora no es válida o ya pasó. Escribe *agendar* para intentar de nuevo.'
+            'La fecha/hora no es válida o ya pasó. Escribe *agendar* para intentar de nuevo.'
           );
         }
 
@@ -206,11 +226,11 @@ export class WebhookHandler {
     if (appointments.length === 0) {
       return this.#messagingService.sendMessage(
         phoneNumber,
-        '📋 No tienes citas programadas.\n\nEscribe *agendar* para crear una.'
+        'No tienes citas programadas.\n\nEscribe *agendar* para crear una.'
       );
     }
 
-    let message = '📋 *Tus Citas Programadas:*\n\n';
+    let message = '*Tus Citas Programadas:*\n\n';
     
     for (const apt of appointments) {
       const dateStr = apt.dateTime.toLocaleDateString('es-CO', {
@@ -237,7 +257,7 @@ export class WebhookHandler {
     if (!appointment) {
       return this.#messagingService.sendMessage(
         phoneNumber,
-        '❌ No se encontró la cita. Verifica el ID e intenta de nuevo.'
+        'No se encontró la cita. Verifica el ID e intenta de nuevo.'
       );
     }
 

@@ -43,8 +43,8 @@ export class HttpServer {
       return this.#sendResponse(res, 200, { status: 'healthy', timestamp: new Date().toISOString() });
     }
 
-    // Serve static images
-    if (url.pathname.startsWith('/images/') && req.method === 'GET') {
+    // Serve static images (support both /images/ and /Imagenes/)
+    if ((url.pathname.startsWith('/images/') || url.pathname.startsWith('/Imagenes/')) && req.method === 'GET') {
       return this.#serveImage(url.pathname, res);
     }
 
@@ -62,8 +62,8 @@ export class HttpServer {
   }
 
   #serveImage(pathname, res) {
-    const imageName = pathname.replace('/images/', '');
-    const imagePath = join(process.cwd(), 'imagenes', imageName);
+    const imageName = pathname.replace('/images/', '').replace('/Imagenes/', '');
+    const imagePath = join(process.cwd(), 'Imagenes', imageName);
     
     if (!existsSync(imagePath)) {
       return this.#sendResponse(res, 404, { error: 'Image not found' });

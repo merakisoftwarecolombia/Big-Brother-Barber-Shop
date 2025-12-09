@@ -17,3 +17,5 @@ services:
         sync: false
       - key: DATABASE_PATH
         value: ./data/appointments.db
+      - key: BASE_IMAGE_URL
+        sync: false

@@ -78,7 +78,7 @@ export class WhatsAppService extends MessagingService {
   }
 
   getImageUrl(imageName) {
-    return `${this.#baseImageUrl}/images/${imageName}`;
+    return `${this.#baseImageUrl}/Imagenes/${imageName}`;
   }
 
   async sendConfirmation(phoneNumber, appointment) {
@@ -91,10 +91,10 @@ export class WhatsAppService extends MessagingService {
       minute: '2-digit'
     });
 
-    const message = `✅ *Cita Confirmada*\n\n` +
+    const message = `💈 *Cita Confirmada*\n\n` +
       `Hola ${appointment.customerName}!\n\n` +
       `Tu cita ha sido agendada para:\n` +
-      `📅 ${dateStr}\n\n` +
+      `${dateStr}\n\n` +
       `ID de cita: ${appointment.id.substring(0, 8)}\n\n` +
       `Para cancelar, escribe: *cancelar ${appointment.id.substring(0, 8)}*`;
 
@@ -110,10 +110,10 @@ export class WhatsAppService extends MessagingService {
       minute: '2-digit'
     });
 
-    const message = `⏰ *Recordatorio de Cita*\n\n` +
+    const message = `💈 *Recordatorio de Cita*\n\n` +
       `Hola ${appointment.customerName}!\n\n` +
       `Te recordamos tu cita programada para:\n` +
-      `📅 ${dateStr}\n\n` +
+      `${dateStr}\n\n` +
       `¡Te esperamos!`;
 
     return this.sendMessage(phoneNumber, message);
