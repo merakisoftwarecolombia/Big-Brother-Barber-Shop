@@ -88,9 +88,33 @@ async function main() {
     port: config.port
   });
 
+  // Background task: Process expired appointments every 5 minutes
+  const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const cleanupInterval = setInterval(async () => {
+    try {
+      const processed = await appointmentRepository.processExpiredAppointments();
+      if (processed > 0) {
+        console.log(`Processed ${processed} expired appointment(s) to history`);
+      }
+    } catch (error) {
+      console.error('Error processing expired appointments:', error.message);
+    }
+  }, CLEANUP_INTERVAL);
+
+  // Run initial cleanup
+  try {
+    const processed = await appointmentRepository.processExpiredAppointments();
+    if (processed > 0) {
+      console.log(`Initial cleanup: processed ${processed} expired appointment(s)`);
+    }
+  } catch (error) {
+    console.error('Error in initial cleanup:', error.message);
+  }
+
   // Graceful shutdown
   const shutdown = () => {
     console.log('Shutting down...');
+    clearInterval(cleanupInterval);
     server.stop();
     appointmentRepository.close();
     process.exit(0);
@@ -104,7 +128,7 @@ async function main() {
 
   console.log(`
 ╔════════════════════════════════════════════════════════╗
-║     WhatsApp Appointment Scheduling System             ║
+║     Big Brother Barber Shop - Appointment System       ║
 ╠════════════════════════════════════════════════════════╣
 ║  Webhook URL: http://localhost:${config.port}/webhook            ║
 ║  Health:      http://localhost:${config.port}/health             ║

@@ -1,3 +1,5 @@
+import { Appointment } from '../../domain/entities/Appointment.js';
+
 /**
  * Webhook Handler - Infrastructure Layer
  * Handles incoming WhatsApp webhook events
@@ -9,8 +11,8 @@ export class WebhookHandler {
   #messagingService;
   #conversationState = new Map();
   #conversationTimers = new Map();
-  #welcomedUsers = new Set(); // Track users who have received the welcome image
-  #inactivityTimeout = 10 * 60 * 1000; // 10 minutes in milliseconds
+  #welcomedUsers = new Set();
+  #inactivityTimeout = 10 * 60 * 1000; // 10 minutes
 
   constructor({ scheduleAppointment, cancelAppointment, listAppointments, messagingService }) {
     this.#scheduleAppointment = scheduleAppointment;
@@ -20,12 +22,10 @@ export class WebhookHandler {
   }
 
   #resetInactivityTimer(phoneNumber) {
-    // Clear existing timer
     if (this.#conversationTimers.has(phoneNumber)) {
       clearTimeout(this.#conversationTimers.get(phoneNumber));
     }
 
-    // Set new timer only if there's an active conversation
     if (this.#conversationState.has(phoneNumber)) {
       const timer = setTimeout(async () => {
         await this.#closeInactiveConversation(phoneNumber);
@@ -39,7 +39,7 @@ export class WebhookHandler {
     if (this.#conversationState.has(phoneNumber)) {
       this.#conversationState.delete(phoneNumber);
       this.#conversationTimers.delete(phoneNumber);
-      this.#welcomedUsers.delete(phoneNumber); // Reset welcome status so they get image again next time
+      this.#welcomedUsers.delete(phoneNumber);
       
       const closeMessage = `*Sesión cerrada por inactividad*\n\n` +
         `Han pasado 10 minutos sin actividad.\n\n` +
@@ -66,10 +66,8 @@ export class WebhookHandler {
     const text = message.text?.body?.trim().toLowerCase() || '';
 
     try {
-      // Reset inactivity timer on any message
       this.#resetInactivityTimer(phoneNumber);
 
-      // Check if this is a new user or first message - send welcome image and menu
       const isFirstMessage = !this.#welcomedUsers.has(phoneNumber) && !this.#conversationState.has(phoneNumber);
       
       if (isFirstMessage) {
@@ -87,7 +85,7 @@ export class WebhookHandler {
         return this.#startScheduling(phoneNumber);
       }
 
-      if (text === '2' || text === 'mis citas') {
+      if (text === '2' || text === 'mis citas' || text === 'citas') {
         this.#clearInactivityTimer(phoneNumber);
         this.#conversationState.delete(phoneNumber);
         return this.#showAppointments(phoneNumber);
@@ -115,17 +113,6 @@ export class WebhookHandler {
   }
 
   async #sendWelcomeWithImage(phoneNumber) {
-    // Enviar imagen de bienvenida primero
-    try {
-      const imageUrl = this.#messagingService.getImageUrl('barbershop.png');
-      if (imageUrl && imageUrl.startsWith('http')) {
-        await this.#messagingService.sendImage(phoneNumber, imageUrl);
-      }
-    } catch (error) {
-      console.log('Could not send welcome image:', error.message);
-    }
-
-    // Mensaje de bienvenida personalizado para Big Brother Barber Shop
     const menu = `💈 *¡Bienvenido a Big Brother Barber Shop!* 💈\n\n` +
       `¿Qué te gustaría hacer hoy?\n\n` +
       `*1.* Agendar una cita\n` +
@@ -136,7 +123,6 @@ export class WebhookHandler {
   }
 
   async #sendMenu(phoneNumber) {
-    // Mensaje de menú sin imagen (para usuarios que ya recibieron la bienvenida)
     const menu = `💈 *Big Brother Barber Shop* 💈\n\n` +
       `¿Qué te gustaría hacer?\n\n` +
       `*1.* Agendar una cita\n` +
@@ -158,7 +144,43 @@ export class WebhookHandler {
   async #handleConversationFlow(phoneNumber, text, state) {
     switch (state.step) {
       case 'name':
+        if (text.length < 2 || text.length > 100) {
+          return this.#messagingService.sendMessage(
+            phoneNumber,
+            'El nombre debe tener entre 2 y 100 caracteres. Intenta de nuevo:'
+          );
+        }
         state.customerName = text;
+        state.step = 'service';
+        this.#conversationState.set(phoneNumber, state);
+        return this.#messagingService.sendMessage(
+          phoneNumber,
+          `*¿Qué servicio deseas?*\n\n` +
+          `*1.* Corte de cabello\n` +
+          `*2.* Arreglo de barba\n` +
+          `*3.* Corte + Barba\n\n` +
+          `_Escribe el número del servicio_`
+        );
+
+      case 'service':
+        const serviceMap = {
+          '1': Appointment.SERVICE_TYPES.CORTE,
+          '2': Appointment.SERVICE_TYPES.BARBA,
+          '3': Appointment.SERVICE_TYPES.CORTE_BARBA,
+          'corte': Appointment.SERVICE_TYPES.CORTE,
+          'barba': Appointment.SERVICE_TYPES.BARBA,
+          'corte y barba': Appointment.SERVICE_TYPES.CORTE_BARBA,
+          'corte + barba': Appointment.SERVICE_TYPES.CORTE_BARBA
+        };
+        
+        const serviceType = serviceMap[text];
+        if (!serviceType) {
+          return this.#messagingService.sendMessage(
+            phoneNumber,
+            'Opción no válida. Escribe 1, 2 o 3:'
+          );
+        }
+        state.serviceType = serviceType;
         state.step = 'date';
         this.#conversationState.set(phoneNumber, state);
         return this.#messagingService.sendMessage(
@@ -193,12 +215,21 @@ export class WebhookHandler {
         
         const dateTime = new Date(`${state.date}T${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}:00`);
         
-        if (isNaN(dateTime.getTime()) || dateTime < new Date()) {
+        if (isNaN(dateTime.getTime())) {
           this.#conversationState.delete(phoneNumber);
           this.#clearInactivityTimer(phoneNumber);
           return this.#messagingService.sendMessage(
             phoneNumber,
-            'La fecha/hora no es válida o ya pasó. Escribe *agendar* para intentar de nuevo.'
+            'La fecha/hora no es válida. Escribe *agendar* para intentar de nuevo.'
+          );
+        }
+
+        if (dateTime <= new Date()) {
+          this.#conversationState.delete(phoneNumber);
+          this.#clearInactivityTimer(phoneNumber);
+          return this.#messagingService.sendMessage(
+            phoneNumber,
+            'La fecha/hora ya pasó. Escribe *agendar* para intentar de nuevo.'
           );
         }
 
@@ -208,6 +239,7 @@ export class WebhookHandler {
         await this.#scheduleAppointment.execute({
           phoneNumber,
           customerName: state.customerName,
+          serviceType: state.serviceType,
           dateTime
         });
         
@@ -230,20 +262,22 @@ export class WebhookHandler {
       );
     }
 
-    let message = '*Tus Citas Programadas:*\n\n';
+    const apt = appointments[0];
+    const dateStr = apt.dateTime.toLocaleDateString('es-CO', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
     
-    for (const apt of appointments) {
-      const dateStr = apt.dateTime.toLocaleDateString('es-CO', {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-      message += `• ${dateStr}\n  ID: ${apt.id.substring(0, 8)}\n\n`;
-    }
-
-    message += `Para cancelar, escribe: *cancelar [ID]*`;
+    const serviceLabel = Appointment.getServiceTypeLabel(apt.serviceType);
+    
+    const message = `*Tu Cita Programada:*\n\n` +
+      `Fecha: ${dateStr}\n` +
+      `Servicio: ${serviceLabel}\n` +
+      `ID: ${apt.id.substring(0, 8)}\n\n` +
+      `Para cancelar, escribe: *cancelar ${apt.id.substring(0, 8)}*`;
     
     return this.#messagingService.sendMessage(phoneNumber, message);
   }

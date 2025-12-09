@@ -15,19 +15,44 @@ export class CancelAppointment {
     const appointment = await this.#appointmentRepository.findById(appointmentId);
     
     if (!appointment) {
-      throw new Error('Appointment not found');
+      await this.#messagingService.sendMessage(
+        phoneNumber,
+        'No se encontró la cita. Verifica el ID e intenta de nuevo.'
+      );
+      return null;
     }
 
     if (appointment.phoneNumber !== phoneNumber) {
-      throw new Error('Unauthorized to cancel this appointment');
+      await this.#messagingService.sendMessage(
+        phoneNumber,
+        'No tienes permiso para cancelar esta cita.'
+      );
+      return null;
+    }
+
+    if (appointment.status === 'cancelled') {
+      await this.#messagingService.sendMessage(
+        phoneNumber,
+        'Esta cita ya fue cancelada anteriormente.'
+      );
+      return null;
     }
 
     appointment.cancel();
     await this.#appointmentRepository.save(appointment);
 
+    const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
     await this.#messagingService.sendMessage(
       phoneNumber,
-      `Your appointment on ${appointment.dateTime.toLocaleDateString()} has been cancelled.`
+      `💈 Tu cita del ${dateStr} ha sido cancelada.\n\n` +
+      `Escribe *agendar* cuando quieras programar una nueva cita.`
     );
 
     return appointment;

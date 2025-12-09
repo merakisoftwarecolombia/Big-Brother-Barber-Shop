@@ -1,4 +1,5 @@
 import { MessagingService } from '../../domain/ports/MessagingService.js';
+import { Appointment } from '../../domain/entities/Appointment.js';
 
 /**
  * WhatsApp Service - Infrastructure Layer
@@ -91,10 +92,13 @@ export class WhatsAppService extends MessagingService {
       minute: '2-digit'
     });
 
+    const serviceLabel = Appointment.getServiceTypeLabel(appointment.serviceType);
+
     const message = `💈 *Cita Confirmada*\n\n` +
       `Hola ${appointment.customerName}!\n\n` +
-      `Tu cita ha sido agendada para:\n` +
-      `${dateStr}\n\n` +
+      `Tu cita ha sido agendada:\n\n` +
+      `Fecha: ${dateStr}\n` +
+      `Servicio: ${serviceLabel}\n\n` +
       `ID de cita: ${appointment.id.substring(0, 8)}\n\n` +
       `Para cancelar, escribe: *cancelar ${appointment.id.substring(0, 8)}*`;
 
@@ -110,10 +114,13 @@ export class WhatsAppService extends MessagingService {
       minute: '2-digit'
     });
 
+    const serviceLabel = Appointment.getServiceTypeLabel(appointment.serviceType);
+
     const message = `💈 *Recordatorio de Cita*\n\n` +
       `Hola ${appointment.customerName}!\n\n` +
-      `Te recordamos tu cita programada para:\n` +
-      `${dateStr}\n\n` +
+      `Te recordamos tu cita:\n\n` +
+      `Fecha: ${dateStr}\n` +
+      `Servicio: ${serviceLabel}\n\n` +
       `¡Te esperamos!`;
 
     return this.sendMessage(phoneNumber, message);
