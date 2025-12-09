@@ -15,7 +15,7 @@ services:
         sync: false
       - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
         sync: false
-      - key: DATABASE_PATH
-        value: ./data/appointments.db
+      - key: DATABASE_URL
+        sync: false
       - key: BASE_IMAGE_URL
         sync: false

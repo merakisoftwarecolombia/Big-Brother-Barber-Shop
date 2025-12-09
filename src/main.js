@@ -24,7 +24,7 @@ function loadEnv() {
 
 loadEnv();
 
-import { SQLiteAppointmentRepository } from './infrastructure/persistence/SQLiteAppointmentRepository.js';
+import { PostgreSQLAppointmentRepository } from './infrastructure/persistence/PostgreSQLAppointmentRepository.js';
 import { WhatsAppService } from './infrastructure/messaging/WhatsAppService.js';
 import { ScheduleAppointment } from './application/usecases/ScheduleAppointment.js';
 import { CancelAppointment } from './application/usecases/CancelAppointment.js';
@@ -38,7 +38,7 @@ const config = {
   verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'default_verify_token',
   accessToken: process.env.WHATSAPP_ACCESS_TOKEN || '',
   phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
-  databasePath: process.env.DATABASE_PATH || './data/appointments.db',
+  databaseUrl: process.env.DATABASE_URL || '',
   baseImageUrl: process.env.BASE_IMAGE_URL || ''
 };
 
@@ -47,10 +47,17 @@ if (!config.accessToken || !config.phoneNumberId) {
   console.warn('Warning: WhatsApp credentials not configured. Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID');
 }
 
+if (!config.databaseUrl) {
+  console.error('Error: DATABASE_URL is required. Set your Supabase connection string.');
+  process.exit(1);
+}
+
 async function main() {
-  // Infrastructure Layer - Initialize repository
-  const appointmentRepository = new SQLiteAppointmentRepository(config.databasePath);
+  // Infrastructure Layer - Initialize PostgreSQL repository
+  console.log('Connecting to database...');
+  const appointmentRepository = new PostgreSQLAppointmentRepository(config.databaseUrl);
   await appointmentRepository.initialize();
+  console.log('Database connected successfully');
 
   const messagingService = new WhatsAppService({
     accessToken: config.accessToken,
@@ -73,7 +80,7 @@ async function main() {
     appointmentRepository
   });
 
-  // Webhook Handler - needs repository for barber queries
+  // Webhook Handler
   const webhookHandler = new WebhookHandler({
     scheduleAppointment,
     cancelAppointment,
@@ -113,11 +120,11 @@ async function main() {
   }
 
   // Graceful shutdown
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('Shutting down...');
     clearInterval(cleanupInterval);
     server.stop();
-    appointmentRepository.close();
+    await appointmentRepository.close();
     process.exit(0);
   };
 
@@ -135,6 +142,7 @@ async function main() {
 ╔════════════════════════════════════════════════════════╗
 ║     Big Brother Barber Shop - Appointment System       ║
 ╠════════════════════════════════════════════════════════╣
+║  Database:    Supabase PostgreSQL                      ║
 ║  Webhook URL: http://localhost:${config.port}/webhook            ║
 ║  Health:      http://localhost:${config.port}/health             ║
 ║  Barbers:     ${barbers.length} active                               ║

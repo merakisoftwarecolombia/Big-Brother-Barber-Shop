@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-appointments",
   "version": "1.0.0",
-  "description": "Minimal WhatsApp appointment scheduling system",
+  "description": "WhatsApp appointment scheduling system for Big Brother Barber Shop",
   "main": "src/main.js",
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "node --watch src/main.js"
   },
   "dependencies": {
-    "sql.js": "^1.10.3"
+    "pg": "^8.11.3"
   },
   "engines": {
     "node": ">=20.0.0"
