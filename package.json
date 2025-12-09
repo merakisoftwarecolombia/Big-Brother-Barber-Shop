@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-appointments",
+  "version": "1.0.0",
+  "description": "Minimal WhatsApp appointment scheduling system",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "node --watch src/main.js"
+  },
+  "dependencies": {
+    "sql.js": "^1.10.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
