@@ -24,7 +24,10 @@ export class HttpServer {
         await this.#handleRequest(req, res);
       } catch (error) {
         console.error('Request error:', error.message);
-        this.#sendResponse(res, 500, { error: 'Internal server error' });
+        // Only send error response if headers haven't been sent
+        if (!res.headersSent) {
+          this.#sendResponse(res, 500, { error: 'Internal server error' });
+        }
       }
     });
 
@@ -115,20 +118,30 @@ export class HttpServer {
     // Respond immediately to avoid timeout
     this.#sendResponse(res, 200, { status: 'received' });
 
-    // Process messages asynchronously
+    // Process messages asynchronously (don't await to avoid blocking)
+    this.#processMessages(body).catch(error => {
+      console.error('Error processing messages:', error.message);
+    });
+  }
+
+  async #processMessages(body) {
     const entry = body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const messages = changes?.value?.messages;
 
     if (messages && messages.length > 0) {
       for (const message of messages) {
-        // Handle text messages
-        if (message.type === 'text') {
-          await this.#webhookHandler.handleMessage(message);
-        }
-        // Handle interactive messages (button clicks and list selections)
-        else if (message.type === 'interactive') {
-          await this.#webhookHandler.handleMessage(message);
+        try {
+          // Handle text messages
+          if (message.type === 'text') {
+            await this.#webhookHandler.handleMessage(message);
+          }
+          // Handle interactive messages (button clicks and list selections)
+          else if (message.type === 'interactive') {
+            await this.#webhookHandler.handleMessage(message);
+          }
+        } catch (error) {
+          console.error(`Error handling message from ${message.from}:`, error.message);
         }
       }
     }
