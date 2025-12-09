@@ -3,7 +3,7 @@ import { Appointment } from '../../domain/entities/Appointment.js';
 /**
  * Schedule Appointment Use Case - Application Layer
  * Handles the business logic for scheduling new appointments
- * 
+ *
  * Business Rules:
  * - Only one active appointment per phone number
  * - Must include service type (corte, barba, corte_barba)
@@ -24,30 +24,28 @@ export class ScheduleAppointment {
     
     if (hasActive) {
       const existing = await this.#appointmentRepository.findByPhone(phoneNumber);
-      const dateStr = existing.dateTime.toLocaleDateString('es-CO', {
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
       
-      await this.#messagingService.sendMessage(
-        phoneNumber,
-        `Ya tienes una cita programada para el ${dateStr}.\n\n` +
-        `Si deseas cambiarla, primero cancela la actual escribiendo:\n` +
-        `*cancelar ${existing.id.substring(0, 8)}*`
-      );
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        header: '💈 Ya tienes una cita',
+        body: `Ya tienes una cita programada.\n\nSi deseas cambiarla, primero cancela la actual.`,
+        buttons: [
+          { id: `cancel_${existing.id.substring(0, 8)}`, title: 'Cancelar cita' },
+          { id: 'btn_ver_citas', title: 'Ver mi cita' }
+        ]
+      });
       
       return null;
     }
 
     // Validate future date
     if (new Date(dateTime) <= new Date()) {
-      await this.#messagingService.sendMessage(
-        phoneNumber,
-        'La fecha debe ser en el futuro. Por favor intenta de nuevo.'
-      );
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        body: 'La fecha debe ser en el futuro. Por favor intenta de nuevo.',
+        buttons: [
+          { id: 'btn_agendar', title: 'Intentar de nuevo' },
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
       return null;
     }
 

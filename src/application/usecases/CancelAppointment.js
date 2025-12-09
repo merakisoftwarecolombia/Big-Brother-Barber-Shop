@@ -15,26 +15,34 @@ export class CancelAppointment {
     const appointment = await this.#appointmentRepository.findById(appointmentId);
     
     if (!appointment) {
-      await this.#messagingService.sendMessage(
-        phoneNumber,
-        'No se encontró la cita. Verifica el ID e intenta de nuevo.'
-      );
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        body: 'No se encontró la cita. Verifica el ID e intenta de nuevo.',
+        buttons: [
+          { id: 'btn_ver_citas', title: 'Ver mi cita' },
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
       return null;
     }
 
     if (appointment.phoneNumber !== phoneNumber) {
-      await this.#messagingService.sendMessage(
-        phoneNumber,
-        'No tienes permiso para cancelar esta cita.'
-      );
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        body: 'No tienes permiso para cancelar esta cita.',
+        buttons: [
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
       return null;
     }
 
     if (appointment.status === 'cancelled') {
-      await this.#messagingService.sendMessage(
-        phoneNumber,
-        'Esta cita ya fue cancelada anteriormente.'
-      );
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        body: 'Esta cita ya fue cancelada anteriormente.',
+        buttons: [
+          { id: 'btn_agendar', title: 'Agendar nueva cita' },
+          { id: 'btn_menu', title: 'Menú principal' }
+        ]
+      });
       return null;
     }
 
@@ -49,11 +57,7 @@ export class CancelAppointment {
       minute: '2-digit'
     });
 
-    await this.#messagingService.sendMessage(
-      phoneNumber,
-      `💈 Tu cita del ${dateStr} ha sido cancelada.\n\n` +
-      `Escribe *agendar* cuando quieras programar una nueva cita.`
-    );
+    await this.#messagingService.sendCancellationConfirmation(phoneNumber, dateStr);
 
     return appointment;
   }

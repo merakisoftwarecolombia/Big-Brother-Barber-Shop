@@ -122,7 +122,12 @@ export class HttpServer {
 
     if (messages && messages.length > 0) {
       for (const message of messages) {
+        // Handle text messages
         if (message.type === 'text') {
+          await this.#webhookHandler.handleMessage(message);
+        }
+        // Handle interactive messages (button clicks and list selections)
+        else if (message.type === 'interactive') {
           await this.#webhookHandler.handleMessage(message);
         }
       }
