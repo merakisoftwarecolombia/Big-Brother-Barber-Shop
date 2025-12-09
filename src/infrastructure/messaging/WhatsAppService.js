@@ -190,12 +190,11 @@ export class WhatsAppService extends MessagingService {
   async sendWelcomeMenu(phoneNumber) {
     return this.sendButtonMessage(phoneNumber, {
       header: '💈 Big Brother Barber Shop',
-      body: '¡Bienvenido! ¿Qué te gustaría hacer hoy?',
+      body: '¡Bienvenido! ¿Qué te gustaría hacer hoy?\n\n\n_Desarrollado por meraki.com_',
       buttons: [
         { id: 'btn_agendar', title: 'Agendar cita' },
         { id: 'btn_ver_citas', title: 'Ver mi cita' }
-      ],
-      footer: 'Desarrollado por Meraki • meraki.com'
+      ]
     });
   }
 
