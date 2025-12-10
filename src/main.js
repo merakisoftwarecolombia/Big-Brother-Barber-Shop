@@ -159,7 +159,8 @@ async function main() {
     addClientNote,
     getBarberStats,
     messagingService,
-    barberRepository: appointmentRepository
+    barberRepository: appointmentRepository,
+    appointmentRepository
   });
 
   // Webhook Handler with Admin Panel

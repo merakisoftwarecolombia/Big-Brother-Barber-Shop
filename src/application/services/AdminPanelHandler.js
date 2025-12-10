@@ -23,6 +23,7 @@ export class AdminPanelHandler {
   #getBarberStats;
   #messagingService;
   #barberRepository;
+  #appointmentRepository;
   #adminSessions = new Map(); // Store authenticated sessions
 
   constructor({
@@ -36,7 +37,8 @@ export class AdminPanelHandler {
     addClientNote,
     getBarberStats,
     messagingService,
-    barberRepository
+    barberRepository,
+    appointmentRepository
   }) {
     this.#authenticateBarber = authenticateBarber;
     this.#getTodayAppointments = getTodayAppointments;
@@ -48,6 +50,7 @@ export class AdminPanelHandler {
     this.#addClientNote = addClientNote;
     this.#getBarberStats = getBarberStats;
     this.#messagingService = messagingService;
+    this.#appointmentRepository = appointmentRepository;
     this.#barberRepository = barberRepository;
   }
 
@@ -125,13 +128,20 @@ export class AdminPanelHandler {
       }
 
       // Handle main menu options
+      if (buttonId === 'adm_appointments') {
+        await this.#sendDateSelectionForAppointments(phoneNumber, barber);
+        return true;
+      }
+
       if (buttonId === 'adm_today') {
         await this.#handleTodayAppointments(phoneNumber, barber);
         return true;
       }
 
-      if (buttonId === 'adm_week') {
-        await this.#handleWeekAppointments(phoneNumber, barber);
+      // Handle date selection for viewing appointments
+      if (buttonId.startsWith('adm_viewdate_')) {
+        const dateStr = buttonId.replace('adm_viewdate_', '');
+        await this.#handleAppointmentsForDate(phoneNumber, barber, dateStr);
         return true;
       }
 
@@ -141,7 +151,16 @@ export class AdminPanelHandler {
       }
 
       if (buttonId === 'adm_block') {
-        await this.#sendBlockTimeMenu(phoneNumber, barber);
+        await this.#sendBlockDateSelection(phoneNumber, barber);
+        return true;
+      }
+
+      // Handle date selection for blocking
+      if (buttonId.startsWith('adm_blockdate_')) {
+        const dateStr = buttonId.replace('adm_blockdate_', '');
+        session.blockDate = dateStr;
+        this.#adminSessions.set(phoneNumber, session);
+        await this.#sendBlockTimeMenu(phoneNumber, barber, dateStr);
         return true;
       }
 
@@ -158,9 +177,10 @@ export class AdminPanelHandler {
       }
 
       // Handle block time slots
-      if (buttonId.startsWith('adm_block_')) {
-        const time = buttonId.replace('adm_block_', '').replace('_', ':');
-        await this.#handleBlockSlot(phoneNumber, barber, time);
+      if (buttonId.startsWith('adm_blocktime_')) {
+        const time = buttonId.replace('adm_blocktime_', '').replace('_', ':');
+        const dateStr = session.blockDate;
+        await this.#handleBlockSlot(phoneNumber, barber, time, dateStr);
         return true;
       }
 
@@ -262,15 +282,14 @@ export class AdminPanelHandler {
         {
           title: '📋 Ver Citas',
           rows: [
-            { id: 'adm_today', title: '📅 Citas de Hoy', description: 'Ver todas las citas del día' },
-            { id: 'adm_week', title: '📆 Resumen Semanal', description: 'Ver citas de la semana' }
+            { id: 'adm_appointments', title: '📅 Ver Citas Programadas', description: 'Hoy y próximos 7 días' }
           ]
         },
         {
           title: '✏️ Gestionar',
           rows: [
             { id: 'adm_manage', title: '👥 Gestionar Citas', description: 'Completar, cancelar o agregar notas' },
-            { id: 'adm_block', title: '🚫 Bloquear Horario', description: 'Bloquear horas (almuerzo, etc.)' }
+            { id: 'adm_block', title: '🚫 Bloquear Horario', description: 'Bloquear fecha y hora específica' }
           ]
         },
         {
@@ -374,57 +393,72 @@ export class AdminPanelHandler {
     });
   }
 
-  async #sendBlockTimeMenu(phoneNumber, barber) {
-    const { start, end } = barber.workingHours;
+  async #sendDateSelectionForAppointments(phoneNumber, barber) {
+    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
     const rows = [];
+    const today = new Date();
 
-    for (let hour = start; hour < end; hour++) {
-      const time = `${hour.toString().padStart(2, '0')}:00`;
-      const displayHour = hour > 12 ? hour - 12 : hour;
-      const ampm = hour >= 12 ? 'PM' : 'AM';
+    for (let i = 0; i <= 7; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
+      
+      const dayName = dayNames[date.getDay()];
+      const day = date.getDate();
+      const month = monthNames[date.getMonth()];
+      const dateStr = date.toISOString().split('T')[0];
+      const isToday = i === 0;
       
       rows.push({
-        id: `adm_block_${hour.toString().padStart(2, '0')}_00`,
-        title: `🚫 Bloquear ${displayHour}:00 ${ampm}`,
-        description: `Bloquear horario de ${time}`
+        id: `adm_viewdate_${dateStr}`,
+        title: isToday ? `📅 HOY - ${dayName} ${day} ${month}` : `${dayName} ${day} ${month}`,
+        description: isToday ? 'Ver citas de hoy' : `Ver citas del ${dayName}`
       });
     }
 
     await this.#messagingService.sendListMessage(phoneNumber, {
-      header: '🚫 Bloquear Horario',
-      body: 'Selecciona la hora a bloquear para hoy:',
-      buttonText: 'Ver horarios',
+      header: '📅 Ver Citas Programadas',
+      body: 'Selecciona una fecha para ver las citas:',
+      buttonText: 'Ver fechas',
       sections: [
         {
-          title: 'Horarios disponibles',
-          rows: rows.slice(0, 10) // WhatsApp limit
+          title: 'Próximos 8 días',
+          rows
         }
-      ],
-      footer: 'El bloqueo aplica solo para hoy'
+      ]
     });
   }
 
-  async #handleTodayAppointments(phoneNumber, barber) {
-    const result = await this.#getTodayAppointments.execute({ barberId: barber.id });
+  async #handleAppointmentsForDate(phoneNumber, barber, dateStr) {
+    const date = new Date(dateStr + 'T12:00:00');
+    const appointments = await this.#appointmentRepository.findByBarberAndDate(barber.id, date);
     
-    if (result.appointments.length === 0) {
+    const activeAppointments = appointments.filter(apt => apt.status !== 'cancelled');
+    
+    const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const dayName = dayNames[date.getDay()];
+    const day = date.getDate();
+    const month = monthNames[date.getMonth()];
+
+    if (activeAppointments.length === 0) {
       await this.#messagingService.sendButtonMessage(phoneNumber, {
-        body: `📋 *Citas de Hoy*\n\nNo tienes citas programadas para hoy.`,
+        body: `📅 *${dayName} ${day} de ${month}*\n\nNo tienes citas programadas para este día.`,
         buttons: [
-          { id: 'adm_menu', title: '📋 Menú Admin' },
-          { id: 'adm_exit', title: '🚪 Salir' }
+          { id: 'adm_appointments', title: '📅 Otra fecha' },
+          { id: 'adm_menu', title: '📋 Menú' }
         ]
       });
       return;
     }
 
-    let message = `📋 *Citas de Hoy - ${barber.name}*\n\n`;
-    message += `📊 Total: ${result.summary.total} | ⏳ Pendientes: ${result.summary.pending} | ✅ Completadas: ${result.summary.completed}\n\n`;
+    let message = `📅 *${dayName} ${day} de ${month}*\n\n`;
+    message += `📊 Total: ${activeAppointments.length} cita${activeAppointments.length !== 1 ? 's' : ''}\n\n`;
 
-    for (const apt of result.appointments) {
-      const time = apt.dateTime.toLocaleTimeString('es-CO', { 
-        hour: '2-digit', 
-        minute: '2-digit' 
+    for (const apt of activeAppointments.sort((a, b) => a.dateTime - b.dateTime)) {
+      const time = apt.dateTime.toLocaleTimeString('es-CO', {
+        hour: '2-digit',
+        minute: '2-digit'
       });
       const service = Appointment.getServiceTypeLabel(apt.serviceType);
       const status = this.#getStatusEmoji(apt.status);
@@ -433,47 +467,105 @@ export class AdminPanelHandler {
       message += `   💇 ${service} | 🆔 ${apt.id.substring(0, 8)}\n\n`;
     }
 
-    if (result.summary.nextAppointment) {
-      const nextTime = result.summary.nextAppointment.dateTime.toLocaleTimeString('es-CO', {
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-      message += `\n⏰ *Próxima:* ${nextTime} - ${result.summary.nextAppointment.customerName}`;
-    }
-
     await this.#messagingService.sendButtonMessage(phoneNumber, {
       body: message,
       buttons: [
-        { id: 'adm_manage', title: '✏️ Gestionar' },
+        { id: 'adm_appointments', title: '📅 Otra fecha' },
         { id: 'adm_menu', title: '📋 Menú' }
       ]
     });
   }
 
-  async #handleWeekAppointments(phoneNumber, barber) {
-    const result = await this.#getWeekAppointments.execute({ barberId: barber.id });
-    
-    let message = `📅 *Resumen Semanal - ${barber.name}*\n\n`;
-    message += `📊 Total: ${result.totalWeek} | ✅ Completadas: ${result.completedWeek} | ⏳ Pendientes: ${result.pendingWeek}\n\n`;
+  async #sendBlockDateSelection(phoneNumber, barber) {
+    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const rows = [];
+    const today = new Date();
 
-    for (const day of result.weekSummary) {
-      const indicator = day.isToday ? '👉 ' : (day.isPast ? '✓ ' : '  ');
-      const dayLabel = day.isToday ? `*${day.dayName} ${day.dayNumber}*` : `${day.dayName} ${day.dayNumber}`;
+    for (let i = 0; i <= 7; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
       
-      message += `${indicator}${dayLabel}: ${day.count} cita${day.count !== 1 ? 's' : ''}`;
-      if (day.count > 0) {
-        message += ` (${day.completed}✓ ${day.pending}⏳)`;
-      }
-      message += '\n';
+      const dayName = dayNames[date.getDay()];
+      const day = date.getDate();
+      const month = monthNames[date.getMonth()];
+      const dateStr = date.toISOString().split('T')[0];
+      const isToday = i === 0;
+      
+      rows.push({
+        id: `adm_blockdate_${dateStr}`,
+        title: isToday ? `📅 HOY - ${dayName} ${day} ${month}` : `${dayName} ${day} ${month}`,
+        description: `Bloquear horario del ${dayName}`
+      });
     }
 
-    await this.#messagingService.sendButtonMessage(phoneNumber, {
-      body: message,
-      buttons: [
-        { id: 'adm_today', title: '📅 Ver Hoy' },
-        { id: 'adm_menu', title: '📋 Menú' }
+    await this.#messagingService.sendListMessage(phoneNumber, {
+      header: '🚫 Bloquear Horario',
+      body: 'Primero selecciona la fecha:',
+      buttonText: 'Ver fechas',
+      sections: [
+        {
+          title: 'Próximos 8 días',
+          rows
+        }
       ]
     });
+  }
+
+  async #sendBlockTimeMenu(phoneNumber, barber, dateStr) {
+    const { start, end } = barber.workingHours;
+    const rows = [];
+    const date = new Date(dateStr + 'T12:00:00');
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+
+    const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const dayName = dayNames[date.getDay()];
+    const day = date.getDate();
+
+    for (let hour = start; hour < end; hour++) {
+      // Skip past hours if today
+      if (isToday && hour <= now.getHours()) {
+        continue;
+      }
+      
+      const displayHour = hour > 12 ? hour - 12 : hour;
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      
+      rows.push({
+        id: `adm_blocktime_${hour.toString().padStart(2, '0')}_00`,
+        title: `🚫 ${displayHour}:00 ${ampm}`,
+        description: `Bloquear de ${hour}:00 a ${hour + 1}:00`
+      });
+    }
+
+    if (rows.length === 0) {
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        body: `🚫 *Bloquear Horario*\n\n${dayName} ${day}\n\nNo hay horarios disponibles para bloquear.`,
+        buttons: [
+          { id: 'adm_block', title: '📅 Otra fecha' },
+          { id: 'adm_menu', title: '📋 Menú' }
+        ]
+      });
+      return;
+    }
+
+    await this.#messagingService.sendListMessage(phoneNumber, {
+      header: '🚫 Bloquear Horario',
+      body: `${dayName} ${day}\n\nSelecciona la hora a bloquear:`,
+      buttonText: 'Ver horarios',
+      sections: [
+        {
+          title: 'Horarios disponibles',
+          rows: rows.slice(0, 10) // WhatsApp limit
+        }
+      ]
+    });
+  }
+
+  async #handleTodayAppointments(phoneNumber, barber) {
+    const today = new Date().toISOString().split('T')[0];
+    await this.#handleAppointmentsForDate(phoneNumber, barber, today);
   }
 
   async #handleCancelAppointment(phoneNumber, barber, appointmentIdPrefix) {
@@ -512,10 +604,13 @@ export class AdminPanelHandler {
     });
   }
 
-  async #handleBlockSlot(phoneNumber, barber, time) {
+  async #handleBlockSlot(phoneNumber, barber, time, dateStr) {
+    const date = dateStr ? new Date(dateStr + 'T12:00:00') : new Date();
+    
     const result = await this.#blockTimeSlot.execute({
       barberId: barber.id,
-      time
+      time,
+      date
     });
 
     if (!result.success) {
@@ -529,8 +624,14 @@ export class AdminPanelHandler {
       return;
     }
 
+    const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const dayName = dayNames[date.getDay()];
+    const day = date.getDate();
+    const month = monthNames[date.getMonth()];
+
     await this.#messagingService.sendButtonMessage(phoneNumber, {
-      body: `🚫 *Horario Bloqueado*\n\nHora: ${time}\nFecha: Hoy\n\nEste horario ya no estará disponible para citas.`,
+      body: `🚫 *Horario Bloqueado*\n\n📅 ${dayName} ${day} de ${month}\n⏰ ${time}\n\nEste horario ya no estará disponible para citas.`,
       buttons: [
         { id: 'adm_block', title: '🚫 Bloquear otro' },
         { id: 'adm_menu', title: '📋 Menú' }
