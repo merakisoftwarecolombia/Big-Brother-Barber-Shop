@@ -250,7 +250,7 @@ export class WhatsAppService extends MessagingService {
    * Send date selection with availability info
    * Uses Colombia timezone for date display
    * @param {string} phoneNumber
-   * @param {Array<{date: Date, availableSlots: number, totalSlots: number, isToday?: boolean}>} datesWithAvailability
+   * @param {Array<{date: Date, availableSlots: number, totalSlots: number, isToday?: boolean, dayIndex?: number}>} datesWithAvailability
    * @param {string} barberName
    */
   async sendDateSelection(phoneNumber, datesWithAvailability, barberName) {
@@ -259,7 +259,7 @@ export class WhatsAppService extends MessagingService {
     
     const rows = datesWithAvailability
       .filter(d => d.availableSlots > 0)
-      .map(({ date, availableSlots, isToday }) => {
+      .map(({ date, availableSlots, isToday, dayIndex }) => {
         const dayName = dayNames[date.getDay()];
         const day = date.getDate();
         const month = monthNames[date.getMonth()];
@@ -270,15 +270,25 @@ export class WhatsAppService extends MessagingService {
         const dayNum = String(date.getDate()).padStart(2, '0');
         const dateStr = `${year}-${monthNum}-${dayNum}`;
         
-        // Show "HOY" for today's date
-        const title = isToday
-          ? `📅 HOY - ${dayName} ${day} ${month}`
-          : `${dayName} ${day} ${month}`;
+        // Build title with date
+        const title = `${dayName} ${day} ${month}`;
+        
+        // Subtle description for first 3 days: Hoy, Mañana, Pasado mañana
+        let description;
+        if (dayIndex === 0 || isToday) {
+          description = 'hoy';
+        } else if (dayIndex === 1) {
+          description = 'mañana';
+        } else if (dayIndex === 2) {
+          description = 'pasado mañana';
+        } else {
+          description = undefined;
+        }
         
         return {
           id: `date_${dateStr}`,
           title,
-          description: `${availableSlots} horario${availableSlots > 1 ? 's' : ''} disponible${availableSlots > 1 ? 's' : ''}`
+          description
         };
       });
 

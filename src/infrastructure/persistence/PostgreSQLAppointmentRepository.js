@@ -54,8 +54,8 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
           alias TEXT UNIQUE,
           pin_hash TEXT,
           is_active BOOLEAN NOT NULL DEFAULT true,
-          working_hours_start INTEGER NOT NULL DEFAULT 9,
-          working_hours_end INTEGER NOT NULL DEFAULT 19,
+          working_hours_start INTEGER NOT NULL DEFAULT 8,
+          working_hours_end INTEGER NOT NULL DEFAULT 22,
           slot_duration INTEGER NOT NULL DEFAULT 60
         )
       `);
@@ -71,6 +71,13 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
             ALTER TABLE barbers ADD COLUMN pin_hash TEXT;
           END IF;
         END $$;
+      `);
+
+      // Migration: Update working hours for all barbers to 8 AM - 10 PM
+      await client.query(`
+        UPDATE barbers
+        SET working_hours_start = 8, working_hours_end = 22
+        WHERE working_hours_start != 8 OR working_hours_end != 22
       `);
 
       // Appointments table - phone_number is unique

@@ -289,20 +289,20 @@ export class WebhookHandler {
     this.#resetInactivityTimer(phoneNumber);
     return this.#messagingService.sendMessage(
       phoneNumber,
-      '👥 *Agendar para otra persona*\n\nEscribe el número de teléfono de la persona (debe empezar con 57):\n\n_Ejemplo: 573001234567_'
+      '👥 *Agendar para otra persona*\n\nEscribe el número de teléfono de la persona con código de país:\n\n_Ejemplo: 573001234567 (Colombia)_\n_Ejemplo: 13051234567 (USA)_'
     );
   }
 
   async #handleConversationFlow(phoneNumber, text, state) {
     // Handle phone number input for "schedule for other"
     if (state.step === 'other_phone') {
-      // Validate phone number format (must start with 57)
+      // Validate phone number format (must have country code and be 10-15 digits)
       const cleanPhone = text.replace(/\D/g, '');
       
-      if (!cleanPhone.startsWith('57') || cleanPhone.length < 10 || cleanPhone.length > 15) {
+      if (cleanPhone.length < 10 || cleanPhone.length > 15) {
         return this.#messagingService.sendMessage(
           phoneNumber,
-          '❌ Número inválido. Debe empezar con 57 y tener entre 10-15 dígitos.\n\n_Ejemplo: 573001234567_\n\nIntenta de nuevo:'
+          '❌ Número inválido. Debe incluir código de país y tener entre 10-15 dígitos.\n\n_Ejemplo: 573001234567 (Colombia)_\n_Ejemplo: 13051234567 (USA)_\n\nIntenta de nuevo:'
         );
       }
 
@@ -571,7 +571,8 @@ export class WebhookHandler {
           date: targetDate,
           availableSlots: availableSlots.length,
           totalSlots: barber.workingHours.end - barber.workingHours.start,
-          isToday: i === 0
+          isToday: i === 0,
+          dayIndex: i  // 0 = hoy, 1 = mañana, 2 = pasado mañana
         });
       }
     }

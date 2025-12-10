@@ -31,8 +31,8 @@ export class Barber {
     this.#pinHash = pinHash;
     this.#isActive = isActive;
     this.#workingHours = workingHours ?? {
-      start: 9,  // 9 AM
-      end: 21,   // 9 PM (extended hours)
+      start: 8,  // 8 AM
+      end: 22,   // 10 PM (last slot at 9 PM, ends at 10 PM)
       slotDuration: 60 // 1 hour per appointment
     };
   }
