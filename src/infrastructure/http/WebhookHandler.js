@@ -32,6 +32,19 @@ export class WebhookHandler {
   #welcomedUsers = new Set();
   #inactivityTimeout = 10 * 60 * 1000; // 10 minutes
 
+  /**
+   * Capitalize each word in a name (first letter uppercase, rest lowercase)
+   * @param {string} name
+   * @returns {string}
+   */
+  #capitalizeName(name) {
+    return name
+      .toLowerCase()
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  }
+
   constructor({
     scheduleAppointment,
     cancelAppointment,
@@ -130,7 +143,8 @@ export class WebhookHandler {
           this.#conversationState.delete(phoneNumber);
           return this.#messagingService.sendWelcomeMenu(phoneNumber);
         }
-        return this.#handleConversationFlow(phoneNumber, textLower, state);
+        // Pass original text (not lowercase) to preserve name capitalization
+        return this.#handleConversationFlow(phoneNumber, text, state);
       }
 
       // First message - welcome
@@ -240,6 +254,11 @@ export class WebhookHandler {
       return this.#handleTimeSelection(phoneNumber, buttonId);
     }
 
+    // Handle "Ver más horarios" button for pagination
+    if (buttonId === 'btn_mas_horarios') {
+      return this.#handleMoreTimeSlots(phoneNumber);
+    }
+
     // Default
     return this.#messagingService.sendWelcomeMenu(phoneNumber);
   }
@@ -338,14 +357,15 @@ export class WebhookHandler {
         );
       }
       
-      // Save name and show barber selection
-      state.customerName = text;
+      // Save name with proper capitalization (First Letter Of Each Word)
+      const capitalizedName = this.#capitalizeName(text);
+      state.customerName = capitalizedName;
       state.step = 'barber';
       this.#conversationState.set(phoneNumber, state);
       
       // Get all barbers
       const barbers = await this.#appointmentRepository.findAllBarbers();
-      return this.#messagingService.sendBarberSelection(phoneNumber, barbers, text);
+      return this.#messagingService.sendBarberSelection(phoneNumber, barbers, capitalizedName);
     }
 
     // For other steps, show menu
@@ -418,10 +438,6 @@ export class WebhookHandler {
     const dateValue = buttonId.replace('date_', '');
     const selectedDate = new Date(dateValue + 'T12:00:00');
     
-    state.date = dateValue;
-    state.step = 'time';
-    this.#conversationState.set(phoneNumber, state);
-
     // Get available slots for this date (uses Colombia timezone internally)
     const availableSlots = await this.#appointmentRepository.getAvailableSlots(state.barberId, selectedDate);
     
@@ -433,7 +449,38 @@ export class WebhookHandler {
       month: 'long'
     });
 
-    return this.#messagingService.sendTimeSelection(phoneNumber, availableSlots, dateStr, state.barberName);
+    // Save state with available slots for pagination
+    state.date = dateValue;
+    state.step = 'time';
+    state.availableSlots = availableSlots;
+    state.dateStr = dateStr;
+    state.timePage = 0;
+    this.#conversationState.set(phoneNumber, state);
+
+    return this.#messagingService.sendTimeSelection(phoneNumber, availableSlots, dateStr, state.barberName, 0);
+  }
+
+  /**
+   * Handle "Ver más horarios" button - show next page of time slots
+   */
+  async #handleMoreTimeSlots(phoneNumber) {
+    const state = this.#conversationState.get(phoneNumber);
+    
+    if (!state || state.step !== 'time' || !state.availableSlots) {
+      return this.#startScheduling(phoneNumber);
+    }
+
+    // Increment page
+    state.timePage = (state.timePage || 0) + 1;
+    this.#conversationState.set(phoneNumber, state);
+
+    return this.#messagingService.sendTimeSelection(
+      phoneNumber,
+      state.availableSlots,
+      state.dateStr,
+      state.barberName,
+      state.timePage
+    );
   }
 
   async #handleTimeSelection(phoneNumber, buttonId) {

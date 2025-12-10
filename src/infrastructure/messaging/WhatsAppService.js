@@ -273,14 +273,12 @@ export class WhatsAppService extends MessagingService {
         // Build title with date
         const title = `${dayName} ${day} ${month}`;
         
-        // Subtle description for first 3 days: Hoy, Mañana, Pasado mañana
+        // Subtle description for first 2 days: Hoy, Mañana (capitalized)
         let description;
         if (dayIndex === 0 || isToday) {
-          description = 'hoy';
+          description = 'Hoy';
         } else if (dayIndex === 1) {
-          description = 'mañana';
-        } else if (dayIndex === 2) {
-          description = 'pasado mañana';
+          description = 'Mañana';
         } else {
           description = undefined;
         }
@@ -316,13 +314,15 @@ export class WhatsAppService extends MessagingService {
   }
 
   /**
-   * Send time selection with available slots
-   * @param {string} phoneNumber 
-   * @param {Array<{time: string, dateTime: Date}>} availableSlots 
-   * @param {string} dateStr 
-   * @param {string} barberName 
+   * Send time selection with available slots (with pagination support)
+   * @param {string} phoneNumber
+   * @param {Array<{time: string, dateTime: Date}>} availableSlots
+   * @param {string} dateStr
+   * @param {string} barberName
+   * @param {number} page - Page number (0 = first 10 slots, 1 = next slots)
+   * @returns {Promise<{hasMore: boolean}>} - Returns whether there are more slots
    */
-  async sendTimeSelection(phoneNumber, availableSlots, dateStr, barberName) {
+  async sendTimeSelection(phoneNumber, availableSlots, dateStr, barberName, page = 0) {
     if (availableSlots.length === 0) {
       return this.sendButtonMessage(phoneNumber, {
         body: `Lo sentimos, no hay horarios disponibles para esta fecha con ${barberName}.`,
@@ -333,13 +333,21 @@ export class WhatsAppService extends MessagingService {
       });
     }
 
+    // WhatsApp has a limit of 10 total rows in a list message
+    const PAGE_SIZE = 10;
+    const startIndex = page * PAGE_SIZE;
+    const endIndex = startIndex + PAGE_SIZE;
+    const paginatedSlots = availableSlots.slice(startIndex, endIndex);
+    const hasMore = availableSlots.length > endIndex;
+    const totalSlots = availableSlots.length;
+
     // Group by morning/afternoon/evening (extended hours until 9 PM)
-    const morningSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) < 12);
-    const afternoonSlots = availableSlots.filter(s => {
+    const morningSlots = paginatedSlots.filter(s => parseInt(s.time.split(':')[0]) < 12);
+    const afternoonSlots = paginatedSlots.filter(s => {
       const hour = parseInt(s.time.split(':')[0]);
       return hour >= 12 && hour < 18;
     });
-    const eveningSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) >= 18);
+    const eveningSlots = paginatedSlots.filter(s => parseInt(s.time.split(':')[0]) >= 18);
     
     const sections = [];
     
@@ -388,12 +396,31 @@ export class WhatsAppService extends MessagingService {
       });
     }
 
-    return this.sendListMessage(phoneNumber, {
+    // Build body message with pagination info
+    let bodyText = `${dateStr} con ${barberName}\nCada cita dura 1 hora`;
+    if (page > 0) {
+      bodyText = `${dateStr} con ${barberName}\nMás horarios disponibles:`;
+    }
+
+    await this.sendListMessage(phoneNumber, {
       header: '🕐 Selecciona la hora',
-      body: `${dateStr} con ${barberName}\nCada cita dura 1 hora`,
+      body: bodyText,
       buttonText: 'Ver horarios',
       sections
     });
+
+    // If there are more slots, send a button to see more
+    if (hasMore) {
+      const remainingSlots = totalSlots - endIndex;
+      await this.sendButtonMessage(phoneNumber, {
+        body: `Hay ${remainingSlots} horario${remainingSlots > 1 ? 's' : ''} más disponible${remainingSlots > 1 ? 's' : ''} en la noche.`,
+        buttons: [
+          { id: 'btn_mas_horarios', title: '🕐 Ver más horarios' }
+        ]
+      });
+    }
+
+    return { hasMore };
   }
 
   async sendConfirmation(phoneNumber, appointment, barberName) {
