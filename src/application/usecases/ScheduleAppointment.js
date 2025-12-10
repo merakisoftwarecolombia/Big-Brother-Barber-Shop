@@ -3,12 +3,13 @@ import { Appointment } from '../../domain/entities/Appointment.js';
 /**
  * Schedule Appointment Use Case - Application Layer
  * Handles the business logic for scheduling new appointments
- * 
+ *
  * Business Rules:
  * - Only one active appointment per phone number
  * - Must include barber, service type
  * - Appointment date must be in the future
  * - Slot must be available for the selected barber
+ * - Automatically registers client information
  */
 export class ScheduleAppointment {
   #appointmentRepository;
@@ -85,6 +86,15 @@ export class ScheduleAppointment {
     });
 
     await this.#appointmentRepository.save(appointment);
+    
+    // Automatically register/update client information
+    // This is transparent to the user - no UI changes needed
+    try {
+      await this.#appointmentRepository.findOrCreateClient(phoneNumber, customerName);
+    } catch (error) {
+      // Log error but don't fail the appointment
+      console.error('[ScheduleAppointment] Error registering client:', error.message);
+    }
     
     await this.#messagingService.sendConfirmation(phoneNumber, appointment, barberName);
 

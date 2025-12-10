@@ -3,6 +3,7 @@ import { Appointment } from '../../domain/entities/Appointment.js';
 import { Barber, DEFAULT_BARBERS } from '../../domain/entities/Barber.js';
 import { BlockedSlot } from '../../domain/entities/BlockedSlot.js';
 import { ClientNote } from '../../domain/entities/ClientNote.js';
+import { Client } from '../../domain/entities/Client.js';
 import { AppointmentRepository } from '../../domain/ports/AppointmentRepository.js';
 
 const { Pool } = pg;
@@ -21,6 +22,7 @@ const { Pool } = pg;
  * - appointment_history: Past appointments
  * - blocked_slots: Blocked time slots for barbers
  * - client_notes: Notes about clients
+ * - clients: Client information (auto-registered)
  */
 export class PostgreSQLAppointmentRepository extends AppointmentRepository {
   #pool;
@@ -127,6 +129,18 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
         )
       `);
 
+      // Clients table - auto-registered when booking
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS clients (
+          phone_number TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          total_appointments INTEGER NOT NULL DEFAULT 0,
+          last_appointment_date TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
       // Indexes
       await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(phone_number)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_barber ON appointments(barber_id)`);
@@ -138,6 +152,7 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
       await client.query(`CREATE INDEX IF NOT EXISTS idx_blocked_slots_barber_date ON blocked_slots(barber_id, date)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_client_notes_phone ON client_notes(phone_number)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_client_notes_barber ON client_notes(barber_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name)`);
     } finally {
       client.release();
     }
@@ -733,6 +748,127 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
       barberId: row.barber_id,
       appointmentId: row.appointment_id,
       content: row.content,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    });
+  }
+
+  // ==================== CLIENT METHODS ====================
+
+  /**
+   * Save or update a client
+   * @param {Client} client
+   * @returns {Promise<Client>}
+   */
+  async saveClient(client) {
+    const data = client.toJSON();
+    await this.#pool.query(`
+      INSERT INTO clients (phone_number, name, total_appointments, last_appointment_date, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (phone_number) DO UPDATE SET
+        name = EXCLUDED.name,
+        total_appointments = EXCLUDED.total_appointments,
+        last_appointment_date = EXCLUDED.last_appointment_date,
+        updated_at = EXCLUDED.updated_at
+    `, [
+      data.phoneNumber,
+      data.name,
+      data.totalAppointments,
+      data.lastAppointmentDate,
+      data.createdAt,
+      data.updatedAt
+    ]);
+    return client;
+  }
+
+  /**
+   * Find a client by phone number
+   * @param {string} phoneNumber
+   * @returns {Promise<Client|null>}
+   */
+  async findClientByPhone(phoneNumber) {
+    const cleanPhone = phoneNumber.replace(/\D/g, '');
+    const result = await this.#pool.query(
+      `SELECT * FROM clients WHERE phone_number = $1`,
+      [cleanPhone]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.#rowToClient(result.rows[0]);
+  }
+
+  /**
+   * Find or create a client - used when booking appointments
+   * If client exists, updates name and increments appointment count
+   * If client doesn't exist, creates new client
+   * @param {string} phoneNumber
+   * @param {string} name
+   * @returns {Promise<Client>}
+   */
+  async findOrCreateClient(phoneNumber, name) {
+    const cleanPhone = phoneNumber.replace(/\D/g, '');
+    
+    // Try to find existing client
+    let client = await this.findClientByPhone(cleanPhone);
+    
+    if (client) {
+      // Update existing client
+      client.updateName(name);
+      client.recordAppointment();
+      await this.saveClient(client);
+      console.log(`[Client] Updated existing client: ${cleanPhone} - ${name}`);
+    } else {
+      // Create new client
+      client = new Client({
+        phoneNumber: cleanPhone,
+        name,
+        totalAppointments: 1,
+        lastAppointmentDate: new Date()
+      });
+      await this.saveClient(client);
+      console.log(`[Client] Created new client: ${cleanPhone} - ${name}`);
+    }
+    
+    return client;
+  }
+
+  /**
+   * Get all clients
+   * @returns {Promise<Client[]>}
+   */
+  async findAllClients() {
+    const result = await this.#pool.query(
+      `SELECT * FROM clients ORDER BY name ASC`
+    );
+    return result.rows.map(row => this.#rowToClient(row));
+  }
+
+  /**
+   * Get total number of clients
+   * @returns {Promise<number>}
+   */
+  async countClients() {
+    const result = await this.#pool.query(`SELECT COUNT(*) as count FROM clients`);
+    return parseInt(result.rows[0].count);
+  }
+
+  /**
+   * Delete a client
+   * @param {string} phoneNumber
+   * @returns {Promise<void>}
+   */
+  async deleteClient(phoneNumber) {
+    const cleanPhone = phoneNumber.replace(/\D/g, '');
+    await this.#pool.query(`DELETE FROM clients WHERE phone_number = $1`, [cleanPhone]);
+  }
+
+  #rowToClient(row) {
+    return Client.fromJSON({
+      phoneNumber: row.phone_number,
+      name: row.name,
+      totalAppointments: row.total_appointments,
+      lastAppointmentDate: row.last_appointment_date,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     });
