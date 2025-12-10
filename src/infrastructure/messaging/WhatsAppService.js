@@ -317,7 +317,7 @@ export class WhatsAppService extends MessagingService {
       return this.sendButtonMessage(phoneNumber, {
         body: `Lo sentimos, no hay horarios disponibles para esta fecha con ${barberName}.`,
         buttons: [
-          { id: 'btn_agendar', title: 'Elegir otra fecha' },
+          { id: 'btn_otra_fecha', title: 'Elegir otra fecha' },
           { id: 'btn_menu', title: 'Menú principal' }
         ]
       });

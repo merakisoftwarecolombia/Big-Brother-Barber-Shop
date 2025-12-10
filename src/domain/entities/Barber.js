@@ -70,10 +70,25 @@ export class Barber {
 
   /**
    * Get current time in Colombia timezone
+   * Returns a Date object representing the current time in Colombia
+   * Note: The returned Date's internal timestamp is adjusted to represent Colombia time
    * @returns {Date}
    */
   static getColombiaTime() {
-    return new Date(new Date().toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    const now = new Date();
+    // Get the UTC time and adjust for Colombia (UTC-5)
+    const utcTime = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const colombiaOffset = -5 * 60 * 60000; // UTC-5 in milliseconds
+    return new Date(utcTime + colombiaOffset);
+  }
+
+  /**
+   * Get today's date string in Colombia timezone (YYYY-MM-DD format)
+   * @returns {string}
+   */
+  static getTodayColombiaString() {
+    const now = new Date();
+    return now.toLocaleDateString('en-CA', { timeZone: Barber.COLOMBIA_TIMEZONE });
   }
 
   /**
@@ -90,9 +105,33 @@ export class Barber {
     const nowColombia = Barber.getColombiaTime();
     const currentHour = nowColombia.getHours();
     
-    // Check if the date is today in Colombia time
-    const dateColombia = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
-    const isToday = dateColombia.toDateString() === nowColombia.toDateString();
+    // Get today's date string in Colombia timezone
+    const todayStr = Barber.getTodayColombiaString();
+    
+    // Extract year, month, day from the input date (treating it as Colombia time)
+    // This handles both Date objects and date strings correctly
+    let year, month, day;
+    
+    if (typeof date === 'string') {
+      // If it's a string like "2024-12-10", parse it directly
+      const parts = date.split('T')[0].split('-');
+      year = parseInt(parts[0]);
+      month = parseInt(parts[1]) - 1; // 0-indexed
+      day = parseInt(parts[2]);
+    } else {
+      // If it's a Date object, extract components in Colombia timezone
+      const dateStr = date.toLocaleDateString('en-CA', { timeZone: Barber.COLOMBIA_TIMEZONE });
+      const parts = dateStr.split('-');
+      year = parseInt(parts[0]);
+      month = parseInt(parts[1]) - 1;
+      day = parseInt(parts[2]);
+    }
+    
+    // Check if this date is today in Colombia
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const isToday = dateStr === todayStr;
+    
+    console.log(`[generateTimeSlots] Date: ${dateStr}, Today: ${todayStr}, isToday: ${isToday}, currentHour: ${currentHour}`);
     
     for (let hour = start; hour < end; hour++) {
       // If today, only include future hours (current hour + 1 and beyond)
@@ -100,12 +139,13 @@ export class Barber {
         continue;
       }
       
-      const slotDate = new Date(date);
-      slotDate.setHours(hour, 0, 0, 0);
+      // Create the slot date - use a consistent format
+      // We create the date as if it's in Colombia timezone
+      const slotDate = new Date(year, month, day, hour, 0, 0, 0);
       
       slots.push({
         time: `${hour.toString().padStart(2, '0')}:00`,
-        dateTime: new Date(slotDate)
+        dateTime: slotDate
       });
     }
     

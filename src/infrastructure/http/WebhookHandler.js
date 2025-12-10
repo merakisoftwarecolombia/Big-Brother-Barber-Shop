@@ -199,6 +199,11 @@ export class WebhookHandler {
       return this.#startSchedulingForOther(phoneNumber);
     }
 
+    // Handle "choose another date" - goes back to date selection without restarting
+    if (buttonId === 'btn_otra_fecha') {
+      return this.#goBackToDateSelection(phoneNumber);
+    }
+
     if (buttonId === 'btn_ver_citas') {
       return this.#showAppointments(phoneNumber);
     }
@@ -538,31 +543,63 @@ export class WebhookHandler {
     const result = [];
     // Use Colombia timezone for date calculations
     const todayColombia = Barber.getColombiaTime();
-    todayColombia.setHours(0, 0, 0, 0);
+    const todayStr = Barber.getTodayColombiaString();
+    
+    console.log(`[getAvailabilityForDates] Today Colombia: ${todayStr}, Current hour: ${todayColombia.getHours()}`);
     
     // Start from today (i = 0), not tomorrow
     for (let i = 0; i < days; i++) {
-      const date = new Date(todayColombia);
-      date.setDate(todayColombia.getDate() + i);
+      // Calculate the date string for this day
+      const targetDate = new Date(todayColombia);
+      targetDate.setDate(todayColombia.getDate() + i);
       
-      const allSlots = barber.generateTimeSlots(date);
-      const bookedSlots = await this.#appointmentRepository.getBookedSlots(barberId, date);
-      const bookedTimes = new Set(bookedSlots.map(d => d.getTime()));
+      // Format as YYYY-MM-DD
+      const year = targetDate.getFullYear();
+      const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+      const day = String(targetDate.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${month}-${day}`;
       
-      const availableSlots = allSlots.filter(slot => !bookedTimes.has(slot.dateTime.getTime()));
+      // Use the same method that will be used when selecting the date
+      // This ensures consistency between the count shown and actual available slots
+      const availableSlots = await this.#appointmentRepository.getAvailableSlots(barberId, targetDate);
       
-      // Only include days that have available slots
-      if (availableSlots.length > 0 || i > 0) {
+      console.log(`[getAvailabilityForDates] Date: ${dateStr}, Available slots: ${availableSlots.length}`);
+      
+      // ONLY include days that have available slots (no empty days)
+      if (availableSlots.length > 0) {
         result.push({
-          date,
+          date: targetDate,
           availableSlots: availableSlots.length,
-          totalSlots: allSlots.length,
+          totalSlots: barber.workingHours.end - barber.workingHours.start,
           isToday: i === 0
         });
       }
     }
     
     return result;
+  }
+
+  /**
+   * Go back to date selection without restarting the entire flow
+   * Preserves customer name, barber, and service selection
+   */
+  async #goBackToDateSelection(phoneNumber) {
+    const state = this.#conversationState.get(phoneNumber);
+    
+    // If no state or missing required data, restart the flow
+    if (!state || !state.barberId || !state.serviceType) {
+      return this.#checkAndStartScheduling(phoneNumber);
+    }
+
+    // Reset to date selection step
+    state.step = 'date';
+    delete state.date;
+    this.#conversationState.set(phoneNumber, state);
+
+    // Get availability for today + next 7 days
+    const datesWithAvailability = await this.#getAvailabilityForDates(state.barberId, 8);
+    
+    return this.#messagingService.sendDateSelection(phoneNumber, datesWithAvailability, state.barberName);
   }
 
   async #showAppointments(phoneNumber) {
