@@ -12,15 +12,22 @@ services:
       - WHATSAPP_WEBHOOK_VERIFY_TOKEN=${WHATSAPP_WEBHOOK_VERIFY_TOKEN}
       - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN}
       - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
-      - DATABASE_PATH=/app/data/appointments.db
-    volumes:
-      - app_data:/app/data
+      - DATABASE_URL=${DATABASE_URL}
+      - BASE_IMAGE_URL=${BASE_IMAGE_URL:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-volumes:
-  app_data:
+    # Security: Run as non-root user
+    user: "1000:1000"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M

@@ -1,9 +1,10 @@
 import { Appointment } from '../../domain/entities/Appointment.js';
+import { AdminCommand } from '../../domain/value-objects/AdminCommand.js';
 
 /**
  * Webhook Handler - Infrastructure Layer
  * Handles incoming WhatsApp webhook events including interactive messages
- * 
+ *
  * Booking Flow:
  * 1. Name input (text)
  * 2. Barber selection (list)
@@ -11,6 +12,9 @@ import { Appointment } from '../../domain/entities/Appointment.js';
  * 4. Date selection (list with availability)
  * 5. Time selection (list with available slots)
  * 6. Confirmation
+ *
+ * Admin Flow:
+ * - Secret command: "admin <alias> <pin> [action] [params]"
  */
 export class WebhookHandler {
   #scheduleAppointment;
@@ -18,17 +22,26 @@ export class WebhookHandler {
   #listAppointments;
   #messagingService;
   #appointmentRepository;
+  #adminPanelHandler;
   #conversationState = new Map();
   #conversationTimers = new Map();
   #welcomedUsers = new Set();
   #inactivityTimeout = 10 * 60 * 1000; // 10 minutes
 
-  constructor({ scheduleAppointment, cancelAppointment, listAppointments, messagingService, appointmentRepository }) {
+  constructor({
+    scheduleAppointment,
+    cancelAppointment,
+    listAppointments,
+    messagingService,
+    appointmentRepository,
+    adminPanelHandler = null
+  }) {
     this.#scheduleAppointment = scheduleAppointment;
     this.#cancelAppointment = cancelAppointment;
     this.#listAppointments = listAppointments;
     this.#messagingService = messagingService;
     this.#appointmentRepository = appointmentRepository;
+    this.#adminPanelHandler = adminPanelHandler;
   }
 
   #resetInactivityTimer(phoneNumber) {
@@ -81,17 +94,39 @@ export class WebhookHandler {
       }
 
       // Handle text messages
-      const text = message.text?.body?.trim().toLowerCase() || '';
+      const text = message.text?.body?.trim() || '';
+      const textLower = text.toLowerCase();
+
+      // Check for admin command FIRST (before any other processing)
+      // Admin commands are secret and should not be logged with sensitive data
+      if (AdminCommand.isAdminCommand(text) && this.#adminPanelHandler) {
+        // Clear any conversation state when entering admin mode
+        this.#conversationState.delete(phoneNumber);
+        this.#clearInactivityTimer(phoneNumber);
+        
+        const handled = await this.#adminPanelHandler.handleCommand(phoneNumber, text);
+        if (handled) {
+          return; // Admin command was processed
+        }
+      }
+
+      // Check if user has active admin session (for text input like notes)
+      if (this.#adminPanelHandler && this.#adminPanelHandler.hasActiveSession(phoneNumber)) {
+        const handled = await this.#adminPanelHandler.handleTextMessage(phoneNumber, text);
+        if (handled) {
+          return;
+        }
+      }
 
       // Check if user is in a conversation flow
       const state = this.#conversationState.get(phoneNumber);
       if (state) {
-        if (text === 'menu' || text === 'inicio' || text === 'salir') {
+        if (textLower === 'menu' || textLower === 'inicio' || textLower === 'salir') {
           this.#clearInactivityTimer(phoneNumber);
           this.#conversationState.delete(phoneNumber);
           return this.#messagingService.sendWelcomeMenu(phoneNumber);
         }
-        return this.#handleConversationFlow(phoneNumber, text, state);
+        return this.#handleConversationFlow(phoneNumber, textLower, state);
       }
 
       // First message - welcome
@@ -102,20 +137,20 @@ export class WebhookHandler {
       }
 
       // Text commands
-      if (text === 'hola' || text === 'menu' || text === 'inicio') {
+      if (textLower === 'hola' || textLower === 'menu' || textLower === 'inicio') {
         return this.#messagingService.sendWelcomeMenu(phoneNumber);
       }
 
-      if (text === 'agendar' || text === '1') {
+      if (textLower === 'agendar' || textLower === '1') {
         return this.#startScheduling(phoneNumber);
       }
 
-      if (text === 'citas' || text === 'mi cita' || text === '2') {
+      if (textLower === 'citas' || textLower === 'mi cita' || textLower === '2') {
         return this.#showAppointments(phoneNumber);
       }
 
-      if (text.startsWith('cancelar ')) {
-        return this.#handleCancelCommand(phoneNumber, text);
+      if (textLower.startsWith('cancelar ')) {
+        return this.#handleCancelCommand(phoneNumber, textLower);
       }
 
       // Default: show menu
@@ -141,6 +176,14 @@ export class WebhookHandler {
     }
 
     console.log(`Interactive response: ${buttonId} from ${phoneNumber}`);
+
+    // Check if this is an admin panel interaction
+    if (buttonId.startsWith('adm_') && this.#adminPanelHandler) {
+      const handled = await this.#adminPanelHandler.handleInteractiveResponse(phoneNumber, buttonId);
+      if (handled) {
+        return;
+      }
+    }
 
     // Handle main menu buttons
     if (buttonId === 'btn_agendar') {

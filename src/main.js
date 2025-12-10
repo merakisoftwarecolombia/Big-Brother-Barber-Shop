@@ -1,6 +1,11 @@
 /**
  * Main Entry Point - Composition Root
  * Wires all dependencies following Dependency Injection pattern
+ *
+ * Architecture: Clean Architecture with DDD
+ * - Domain Layer: Entities, Value Objects, Ports
+ * - Application Layer: Use Cases, Services
+ * - Infrastructure Layer: Repositories, External Services
  */
 import { readFileSync, existsSync } from 'fs';
 
@@ -24,13 +29,31 @@ function loadEnv() {
 
 loadEnv();
 
+// Infrastructure Layer
 import { PostgreSQLAppointmentRepository } from './infrastructure/persistence/PostgreSQLAppointmentRepository.js';
 import { WhatsAppService } from './infrastructure/messaging/WhatsAppService.js';
+import { HashService } from './infrastructure/security/HashService.js';
+import { WebhookHandler } from './infrastructure/http/WebhookHandler.js';
+import { HttpServer } from './infrastructure/http/HttpServer.js';
+
+// Application Layer - Use Cases
 import { ScheduleAppointment } from './application/usecases/ScheduleAppointment.js';
 import { CancelAppointment } from './application/usecases/CancelAppointment.js';
 import { ListAppointments } from './application/usecases/ListAppointments.js';
-import { WebhookHandler } from './infrastructure/http/WebhookHandler.js';
-import { HttpServer } from './infrastructure/http/HttpServer.js';
+
+// Application Layer - Admin Use Cases
+import { AuthenticateBarber } from './application/usecases/admin/AuthenticateBarber.js';
+import { GetTodayAppointments } from './application/usecases/admin/GetTodayAppointments.js';
+import { GetWeekAppointments } from './application/usecases/admin/GetWeekAppointments.js';
+import { CancelAppointmentByBarber } from './application/usecases/admin/CancelAppointmentByBarber.js';
+import { BlockTimeSlot } from './application/usecases/admin/BlockTimeSlot.js';
+import { UnblockTimeSlot } from './application/usecases/admin/UnblockTimeSlot.js';
+import { CompleteAppointment } from './application/usecases/admin/CompleteAppointment.js';
+import { AddClientNote } from './application/usecases/admin/AddClientNote.js';
+import { GetBarberStats } from './application/usecases/admin/GetBarberStats.js';
+
+// Application Layer - Services
+import { AdminPanelHandler } from './application/services/AdminPanelHandler.js';
 
 // Configuration from environment
 const config = {
@@ -53,9 +76,12 @@ if (!config.databaseUrl) {
 }
 
 async function main() {
-  // Infrastructure Layer - Initialize PostgreSQL repository
+  // Infrastructure Layer - Security Service
+  const hashService = new HashService();
+
+  // Infrastructure Layer - Initialize PostgreSQL repository with hash service
   console.log('Connecting to database...');
-  const appointmentRepository = new PostgreSQLAppointmentRepository(config.databaseUrl);
+  const appointmentRepository = new PostgreSQLAppointmentRepository(config.databaseUrl, hashService);
   await appointmentRepository.initialize();
   console.log('Database connected successfully');
 
@@ -65,7 +91,7 @@ async function main() {
     baseImageUrl: config.baseImageUrl
   });
 
-  // Application Layer - Use Cases
+  // Application Layer - Customer Use Cases
   const scheduleAppointment = new ScheduleAppointment({
     appointmentRepository,
     messagingService
@@ -80,13 +106,70 @@ async function main() {
     appointmentRepository
   });
 
-  // Webhook Handler
+  // Application Layer - Admin Use Cases
+  const authenticateBarber = new AuthenticateBarber({
+    barberRepository: appointmentRepository, // Repository implements both interfaces
+    hashService
+  });
+
+  const getTodayAppointments = new GetTodayAppointments({
+    appointmentRepository
+  });
+
+  const getWeekAppointments = new GetWeekAppointments({
+    appointmentRepository
+  });
+
+  const cancelAppointmentByBarber = new CancelAppointmentByBarber({
+    appointmentRepository,
+    messagingService
+  });
+
+  const blockTimeSlot = new BlockTimeSlot({
+    blockedSlotRepository: appointmentRepository,
+    barberRepository: appointmentRepository
+  });
+
+  const unblockTimeSlot = new UnblockTimeSlot({
+    blockedSlotRepository: appointmentRepository
+  });
+
+  const completeAppointment = new CompleteAppointment({
+    appointmentRepository
+  });
+
+  const addClientNote = new AddClientNote({
+    clientNoteRepository: appointmentRepository,
+    appointmentRepository
+  });
+
+  const getBarberStats = new GetBarberStats({
+    appointmentRepository
+  });
+
+  // Application Layer - Admin Panel Handler (Facade)
+  const adminPanelHandler = new AdminPanelHandler({
+    authenticateBarber,
+    getTodayAppointments,
+    getWeekAppointments,
+    cancelAppointmentByBarber,
+    blockTimeSlot,
+    unblockTimeSlot,
+    completeAppointment,
+    addClientNote,
+    getBarberStats,
+    messagingService,
+    barberRepository: appointmentRepository
+  });
+
+  // Webhook Handler with Admin Panel
   const webhookHandler = new WebhookHandler({
     scheduleAppointment,
     cancelAppointment,
     listAppointments,
     messagingService,
-    appointmentRepository
+    appointmentRepository,
+    adminPanelHandler
   });
 
   // HTTP Server
@@ -139,15 +222,25 @@ async function main() {
   console.log(`Loaded ${barbers.length} barbers: ${barbers.map(b => b.name).join(', ')}`);
 
   console.log(`
-╔════════════════════════════════════════════════════════╗
-║     Big Brother Barber Shop - Appointment System       ║
-╠════════════════════════════════════════════════════════╣
-║  Database:    Supabase PostgreSQL                      ║
-║  Webhook URL: http://localhost:${config.port}/webhook            ║
-║  Health:      http://localhost:${config.port}/health             ║
-║  Barbers:     ${barbers.length} active                               ║
-╚════════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════════════════╗
+║     Big Brother Barber Shop - Appointment System           ║
+╠════════════════════════════════════════════════════════════╣
+║  Database:    Supabase PostgreSQL                          ║
+║  Webhook URL: http://localhost:${config.port}/webhook              ║
+║  Health:      http://localhost:${config.port}/health               ║
+║  Barbers:     ${barbers.length} active                                 ║
+╠════════════════════════════════════════════════════════════╣
+║  Admin Panel: Enabled                                      ║
+║  Command:     admin <alias> <pin> [action]                 ║
+╚════════════════════════════════════════════════════════════╝
 `);
+
+  // Log barber aliases for admin reference (without sensitive data)
+  console.log('Barber aliases for admin access:');
+  for (const barber of barbers) {
+    console.log(`  - ${barber.name}: "${barber.alias}"`);
+  }
+  console.log('\nNote: Default PIN is "1234" - Change in production!\n');
 }
 
 main().catch(err => {

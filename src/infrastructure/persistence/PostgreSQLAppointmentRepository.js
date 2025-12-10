@@ -1,6 +1,8 @@
 import pg from 'pg';
 import { Appointment } from '../../domain/entities/Appointment.js';
 import { Barber, DEFAULT_BARBERS } from '../../domain/entities/Barber.js';
+import { BlockedSlot } from '../../domain/entities/BlockedSlot.js';
+import { ClientNote } from '../../domain/entities/ClientNote.js';
 import { AppointmentRepository } from '../../domain/ports/AppointmentRepository.js';
 
 const { Pool } = pg;
@@ -8,21 +10,25 @@ const { Pool } = pg;
 /**
  * PostgreSQL Repository - Infrastructure Layer
  * Implements persistence using Supabase PostgreSQL
- * 
+ *
  * Schema:
- * - barbers: Barber information
+ * - barbers: Barber information with admin credentials
  * - appointments: Active appointments (one per phone number)
  * - appointment_history: Past appointments
+ * - blocked_slots: Blocked time slots for barbers
+ * - client_notes: Notes about clients
  */
 export class PostgreSQLAppointmentRepository extends AppointmentRepository {
   #pool;
+  #hashService;
 
-  constructor(connectionString) {
+  constructor(connectionString, hashService = null) {
     super();
     this.#pool = new Pool({
       connectionString,
       ssl: { rejectUnauthorized: false }
     });
+    this.#hashService = hashService;
   }
 
   async initialize() {
@@ -34,16 +40,31 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
   async #createTables() {
     const client = await this.#pool.connect();
     try {
-      // Barbers table
+      // Barbers table with admin credentials
       await client.query(`
         CREATE TABLE IF NOT EXISTS barbers (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
+          alias TEXT UNIQUE,
+          pin_hash TEXT,
           is_active BOOLEAN NOT NULL DEFAULT true,
           working_hours_start INTEGER NOT NULL DEFAULT 9,
           working_hours_end INTEGER NOT NULL DEFAULT 19,
           slot_duration INTEGER NOT NULL DEFAULT 60
         )
+      `);
+
+      // Add alias and pin_hash columns if they don't exist (migration)
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='barbers' AND column_name='alias') THEN
+            ALTER TABLE barbers ADD COLUMN alias TEXT UNIQUE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='barbers' AND column_name='pin_hash') THEN
+            ALTER TABLE barbers ADD COLUMN pin_hash TEXT;
+          END IF;
+        END $$;
       `);
 
       // Appointments table - phone_number is unique
@@ -75,12 +96,44 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
         )
       `);
 
+      // Blocked slots table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS blocked_slots (
+          id TEXT PRIMARY KEY,
+          barber_id TEXT NOT NULL REFERENCES barbers(id),
+          date DATE,
+          start_time TEXT NOT NULL,
+          end_time TEXT NOT NULL,
+          reason TEXT DEFAULT 'otro',
+          is_recurring BOOLEAN NOT NULL DEFAULT false,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      // Client notes table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS client_notes (
+          id TEXT PRIMARY KEY,
+          phone_number TEXT NOT NULL,
+          barber_id TEXT NOT NULL REFERENCES barbers(id),
+          appointment_id TEXT,
+          content TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
       // Indexes
       await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(phone_number)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_barber ON appointments(barber_id)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_datetime ON appointments(date_time)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_appointments_barber_date ON appointments(barber_id, date_time)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_history_phone ON appointment_history(phone_number)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_barbers_alias ON barbers(alias)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_blocked_slots_barber ON blocked_slots(barber_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_blocked_slots_barber_date ON blocked_slots(barber_id, date)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_client_notes_phone ON client_notes(phone_number)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_client_notes_barber ON client_notes(barber_id)`);
     } finally {
       client.release();
     }
@@ -90,11 +143,20 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
     const client = await this.#pool.connect();
     try {
       for (const barberData of DEFAULT_BARBERS) {
+        // Generate default PIN hash if hash service is available
+        let pinHash = null;
+        if (this.#hashService) {
+          // Default PIN is "1234" - MUST be changed in production
+          pinHash = await this.#hashService.hash('1234');
+        }
+
         await client.query(`
-          INSERT INTO barbers (id, name, is_active)
-          VALUES ($1, $2, true)
-          ON CONFLICT (id) DO NOTHING
-        `, [barberData.id, barberData.name]);
+          INSERT INTO barbers (id, name, alias, pin_hash, is_active)
+          VALUES ($1, $2, $3, $4, true)
+          ON CONFLICT (id) DO UPDATE SET
+            alias = COALESCE(barbers.alias, EXCLUDED.alias),
+            pin_hash = COALESCE(barbers.pin_hash, EXCLUDED.pin_hash)
+        `, [barberData.id, barberData.name, barberData.alias, pinHash]);
       }
     } finally {
       client.release();
@@ -121,10 +183,39 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
     return this.#rowToBarber(result.rows[0]);
   }
 
+  async findByAlias(alias) {
+    if (!alias) return null;
+    const result = await this.#pool.query(
+      `SELECT * FROM barbers WHERE alias = $1 AND is_active = true`,
+      [alias.toLowerCase().trim()]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.#rowToBarber(result.rows[0]);
+  }
+
+  async updatePinHash(barberId, pinHash) {
+    await this.#pool.query(
+      `UPDATE barbers SET pin_hash = $1 WHERE id = $2`,
+      [pinHash, barberId]
+    );
+  }
+
+  async hasPin(barberId) {
+    const result = await this.#pool.query(
+      `SELECT pin_hash FROM barbers WHERE id = $1`,
+      [barberId]
+    );
+    return result.rows.length > 0 && result.rows[0].pin_hash !== null;
+  }
+
   #rowToBarber(row) {
     return Barber.fromJSON({
       id: row.id,
       name: row.name,
+      alias: row.alias,
+      pinHash: row.pin_hash,
       isActive: row.is_active,
       workingHours: {
         start: row.working_hours_start,
@@ -394,10 +485,23 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
 
     const allSlots = barber.generateTimeSlots(date);
     const bookedSlots = await this.getBookedSlots(barberId, date);
+    const blockedSlots = await this.findBlockedSlotsByBarberAndDate(barberId, date);
     
     const bookedTimes = new Set(bookedSlots.map(d => d.getTime()));
     
-    return allSlots.filter(slot => !bookedTimes.has(slot.dateTime.getTime()));
+    // Filter out booked and blocked slots
+    return allSlots.filter(slot => {
+      if (bookedTimes.has(slot.dateTime.getTime())) {
+        return false;
+      }
+      // Check if slot conflicts with any blocked slot
+      for (const blocked of blockedSlots) {
+        if (blocked.conflictsWith(slot.dateTime)) {
+          return false;
+        }
+      }
+      return true;
+    });
   }
 
   #rowToAppointment(row) {
@@ -410,6 +514,198 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
       dateTime: row.date_time,
       status: row.status,
       createdAt: row.created_at
+    });
+  }
+
+  // ==================== BLOCKED SLOT METHODS ====================
+
+  async saveBlockedSlot(blockedSlot) {
+    const data = blockedSlot.toJSON();
+    await this.#pool.query(`
+      INSERT INTO blocked_slots (id, barber_id, date, start_time, end_time, reason, is_recurring, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO UPDATE SET
+        start_time = EXCLUDED.start_time,
+        end_time = EXCLUDED.end_time,
+        reason = EXCLUDED.reason
+    `, [
+      data.id,
+      data.barberId,
+      data.date ? new Date(data.date).toISOString().split('T')[0] : null,
+      data.startTime,
+      data.endTime,
+      data.reason,
+      data.isRecurring,
+      data.createdAt
+    ]);
+    return blockedSlot;
+  }
+
+  async findBlockedSlotById(id) {
+    const result = await this.#pool.query(
+      `SELECT * FROM blocked_slots WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.#rowToBlockedSlot(result.rows[0]);
+  }
+
+  async findBlockedSlotsByBarberId(barberId) {
+    const result = await this.#pool.query(
+      `SELECT * FROM blocked_slots WHERE barber_id = $1 ORDER BY date, start_time`,
+      [barberId]
+    );
+    return result.rows.map(row => this.#rowToBlockedSlot(row));
+  }
+
+  async findBlockedSlotsByBarberAndDate(barberId, date) {
+    const dateStr = new Date(date).toISOString().split('T')[0];
+    const result = await this.#pool.query(`
+      SELECT * FROM blocked_slots
+      WHERE barber_id = $1
+      AND (date = $2 OR is_recurring = true)
+      ORDER BY start_time
+    `, [barberId, dateStr]);
+    return result.rows.map(row => this.#rowToBlockedSlot(row));
+  }
+
+  async isTimeBlocked(barberId, dateTime) {
+    const blockedSlots = await this.findBlockedSlotsByBarberAndDate(barberId, dateTime);
+    return blockedSlots.some(slot => slot.conflictsWith(dateTime));
+  }
+
+  async deleteBlockedSlot(id) {
+    await this.#pool.query(`DELETE FROM blocked_slots WHERE id = $1`, [id]);
+  }
+
+  async deleteBlockedSlotByBarberDateTime(barberId, date, startTime) {
+    const dateStr = new Date(date).toISOString().split('T')[0];
+    const result = await this.#pool.query(`
+      DELETE FROM blocked_slots
+      WHERE barber_id = $1 AND date = $2 AND start_time = $3
+      RETURNING id
+    `, [barberId, dateStr, startTime]);
+    return result.rowCount > 0;
+  }
+
+  #rowToBlockedSlot(row) {
+    return BlockedSlot.fromJSON({
+      id: row.id,
+      barberId: row.barber_id,
+      date: row.date,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      reason: row.reason,
+      isRecurring: row.is_recurring,
+      createdAt: row.created_at
+    });
+  }
+
+  // ==================== CLIENT NOTE METHODS ====================
+
+  async saveClientNote(note) {
+    const data = note.toJSON();
+    const existing = await this.#pool.query(
+      `SELECT id FROM client_notes WHERE id = $1`,
+      [data.id]
+    );
+
+    if (existing.rows.length > 0) {
+      await this.#pool.query(`
+        UPDATE client_notes SET
+          content = $1,
+          updated_at = $2
+        WHERE id = $3
+      `, [data.content, data.updatedAt, data.id]);
+    } else {
+      await this.#pool.query(`
+        INSERT INTO client_notes (id, phone_number, barber_id, appointment_id, content, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        data.id,
+        data.phoneNumber,
+        data.barberId,
+        data.appointmentId,
+        data.content,
+        data.createdAt,
+        data.updatedAt
+      ]);
+    }
+    return note;
+  }
+
+  async findClientNoteById(id) {
+    const result = await this.#pool.query(
+      `SELECT * FROM client_notes WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.#rowToClientNote(result.rows[0]);
+  }
+
+  async findClientNotesByPhoneNumber(phoneNumber) {
+    const result = await this.#pool.query(
+      `SELECT * FROM client_notes WHERE phone_number = $1 ORDER BY created_at DESC`,
+      [phoneNumber]
+    );
+    return result.rows.map(row => this.#rowToClientNote(row));
+  }
+
+  async findClientNotesByBarberId(barberId) {
+    const result = await this.#pool.query(
+      `SELECT * FROM client_notes WHERE barber_id = $1 ORDER BY created_at DESC`,
+      [barberId]
+    );
+    return result.rows.map(row => this.#rowToClientNote(row));
+  }
+
+  async findClientNotesByPhoneAndBarber(phoneNumber, barberId) {
+    const result = await this.#pool.query(
+      `SELECT * FROM client_notes WHERE phone_number = $1 AND barber_id = $2 ORDER BY created_at DESC`,
+      [phoneNumber, barberId]
+    );
+    return result.rows.map(row => this.#rowToClientNote(row));
+  }
+
+  async findClientNoteByAppointmentId(appointmentId) {
+    const result = await this.#pool.query(
+      `SELECT * FROM client_notes WHERE appointment_id = $1`,
+      [appointmentId]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.#rowToClientNote(result.rows[0]);
+  }
+
+  async deleteClientNote(id) {
+    await this.#pool.query(`DELETE FROM client_notes WHERE id = $1`, [id]);
+  }
+
+  async findLatestClientNoteByPhone(phoneNumber) {
+    const result = await this.#pool.query(
+      `SELECT * FROM client_notes WHERE phone_number = $1 ORDER BY created_at DESC LIMIT 1`,
+      [phoneNumber]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    return this.#rowToClientNote(result.rows[0]);
+  }
+
+  #rowToClientNote(row) {
+    return ClientNote.fromJSON({
+      id: row.id,
+      phoneNumber: row.phone_number,
+      barberId: row.barber_id,
+      appointmentId: row.appointment_id,
+      content: row.content,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
     });
   }
 
