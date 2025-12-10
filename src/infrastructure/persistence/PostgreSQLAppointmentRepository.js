@@ -11,6 +11,10 @@ const { Pool } = pg;
  * PostgreSQL Repository - Infrastructure Layer
  * Implements persistence using Supabase PostgreSQL
  *
+ * IMPORTANT: All date operations use Colombia timezone (UTC-5)
+ * The database stores timestamps in UTC, but queries and comparisons
+ * are done using Colombia time for consistency.
+ *
  * Schema:
  * - barbers: Barber information with admin credentials
  * - appointments: Active appointments (one per phone number)
@@ -320,14 +324,17 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
   }
 
   async findByBarberAndDate(barberId, date) {
-    const startOfDay = new Date(date);
+    // Use Colombia timezone for date boundaries
+    const colombiaDate = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    
+    const startOfDay = new Date(colombiaDate);
     startOfDay.setHours(0, 0, 0, 0);
     
-    const endOfDay = new Date(date);
+    const endOfDay = new Date(colombiaDate);
     endOfDay.setHours(23, 59, 59, 999);
     
     const result = await this.#pool.query(`
-      SELECT * FROM appointments 
+      SELECT * FROM appointments
       WHERE barber_id = $1
       AND date_time >= $2
       AND date_time <= $3
@@ -411,10 +418,11 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
     let processedCount = 0;
     
     try {
-      // Find expired appointments
+      // Find expired appointments using Colombia timezone
+      // NOW() AT TIME ZONE 'America/Bogota' ensures we compare with Colombia time
       const expiredResult = await client.query(`
-        SELECT * FROM appointments 
-        WHERE date_time < NOW() AND status != 'cancelled'
+        SELECT * FROM appointments
+        WHERE date_time < (NOW() AT TIME ZONE 'America/Bogota') AND status != 'cancelled'
       `);
       
       for (const row of expiredResult.rows) {
@@ -455,14 +463,17 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
     const counts = new Map();
     
     for (const date of dates) {
-      const startOfDay = new Date(date);
+      // Use Colombia timezone for date boundaries
+      const colombiaDate = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+      
+      const startOfDay = new Date(colombiaDate);
       startOfDay.setHours(0, 0, 0, 0);
       
-      const endOfDay = new Date(date);
+      const endOfDay = new Date(colombiaDate);
       endOfDay.setHours(23, 59, 59, 999);
       
       const result = await this.#pool.query(`
-        SELECT COUNT(*) as count FROM appointments 
+        SELECT COUNT(*) as count FROM appointments
         WHERE barber_id = $1
         AND date_time >= $2
         AND date_time <= $3
@@ -470,7 +481,13 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
       `, [barberId, startOfDay.toISOString(), endOfDay.toISOString()]);
       
       const count = parseInt(result.rows[0].count);
-      const dateKey = date.toISOString().split('T')[0];
+      
+      // Format date key using Colombia timezone
+      const year = colombiaDate.getFullYear();
+      const month = String(colombiaDate.getMonth() + 1).padStart(2, '0');
+      const day = String(colombiaDate.getDate()).padStart(2, '0');
+      const dateKey = `${year}-${month}-${day}`;
+      
       counts.set(dateKey, count);
     }
     
@@ -561,7 +578,13 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
   }
 
   async findBlockedSlotsByBarberAndDate(barberId, date) {
-    const dateStr = new Date(date).toISOString().split('T')[0];
+    // Use Colombia timezone for date string
+    const colombiaDate = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    const year = colombiaDate.getFullYear();
+    const month = String(colombiaDate.getMonth() + 1).padStart(2, '0');
+    const day = String(colombiaDate.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    
     const result = await this.#pool.query(`
       SELECT * FROM blocked_slots
       WHERE barber_id = $1
@@ -581,7 +604,13 @@ export class PostgreSQLAppointmentRepository extends AppointmentRepository {
   }
 
   async deleteBlockedSlotByBarberDateTime(barberId, date, startTime) {
-    const dateStr = new Date(date).toISOString().split('T')[0];
+    // Use Colombia timezone for date string
+    const colombiaDate = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    const year = colombiaDate.getFullYear();
+    const month = String(colombiaDate.getMonth() + 1).padStart(2, '0');
+    const day = String(colombiaDate.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    
     const result = await this.#pool.query(`
       DELETE FROM blocked_slots
       WHERE barber_id = $1 AND date = $2 AND start_time = $3

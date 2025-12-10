@@ -1,15 +1,19 @@
 import { Appointment } from '../../domain/entities/Appointment.js';
 import { AdminCommand } from '../../domain/value-objects/AdminCommand.js';
+import { Barber } from '../../domain/entities/Barber.js';
 
 /**
  * Webhook Handler - Infrastructure Layer
  * Handles incoming WhatsApp webhook events including interactive messages
  *
+ * IMPORTANT: All date/time operations use Colombia timezone (UTC-5)
+ * This ensures consistent behavior regardless of server location.
+ *
  * Booking Flow:
  * 1. Name input (text)
  * 2. Barber selection (list)
  * 3. Service selection (list)
- * 4. Date selection (list with availability)
+ * 4. Date selection (list with availability) - includes TODAY
  * 5. Time selection (list with available slots)
  * 6. Confirmation
  *
@@ -187,7 +191,12 @@ export class WebhookHandler {
 
     // Handle main menu buttons
     if (buttonId === 'btn_agendar') {
-      return this.#startScheduling(phoneNumber);
+      return this.#checkAndStartScheduling(phoneNumber);
+    }
+
+    // Handle "schedule for another person" option
+    if (buttonId === 'btn_agendar_otro') {
+      return this.#startSchedulingForOther(phoneNumber);
     }
 
     if (buttonId === 'btn_ver_citas') {
@@ -230,8 +239,39 @@ export class WebhookHandler {
     return this.#messagingService.sendWelcomeMenu(phoneNumber);
   }
 
+  async #checkAndStartScheduling(phoneNumber) {
+    // Check if user already has an active appointment
+    const hasActive = await this.#appointmentRepository.hasActiveAppointment(phoneNumber);
+    
+    if (hasActive) {
+      const existing = await this.#appointmentRepository.findByPhone(phoneNumber);
+      const barber = await this.#appointmentRepository.findBarberById(existing.barberId);
+      const barberName = barber ? barber.name : 'Barbero';
+      
+      const dateStr = existing.dateTime.toLocaleDateString('es-CO', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      return this.#messagingService.sendButtonMessage(phoneNumber, {
+        header: '💈 Ya tienes una cita',
+        body: `Ya tienes una cita programada:\n\n📅 ${dateStr}\n👤 Barbero: ${barberName}\n🆔 ${existing.id.substring(0, 8)}\n\n¿Qué deseas hacer?`,
+        buttons: [
+          { id: `cancel_${existing.id.substring(0, 8)}`, title: '❌ Cancelar cita' },
+          { id: 'btn_agendar_otro', title: '👥 Agendar para otro' }
+        ]
+      });
+    }
+
+    // No active appointment, proceed with normal scheduling
+    return this.#startScheduling(phoneNumber);
+  }
+
   async #startScheduling(phoneNumber) {
-    this.#conversationState.set(phoneNumber, { step: 'name' });
+    this.#conversationState.set(phoneNumber, { step: 'name', forSelf: true, targetPhone: phoneNumber });
     this.#resetInactivityTimer(phoneNumber);
     return this.#messagingService.sendMessage(
       phoneNumber,
@@ -239,7 +279,52 @@ export class WebhookHandler {
     );
   }
 
+  async #startSchedulingForOther(phoneNumber) {
+    this.#conversationState.set(phoneNumber, { step: 'other_phone', forSelf: false });
+    this.#resetInactivityTimer(phoneNumber);
+    return this.#messagingService.sendMessage(
+      phoneNumber,
+      '👥 *Agendar para otra persona*\n\nEscribe el número de teléfono de la persona (debe empezar con 57):\n\n_Ejemplo: 573001234567_'
+    );
+  }
+
   async #handleConversationFlow(phoneNumber, text, state) {
+    // Handle phone number input for "schedule for other"
+    if (state.step === 'other_phone') {
+      // Validate phone number format (must start with 57)
+      const cleanPhone = text.replace(/\D/g, '');
+      
+      if (!cleanPhone.startsWith('57') || cleanPhone.length < 10 || cleanPhone.length > 15) {
+        return this.#messagingService.sendMessage(
+          phoneNumber,
+          '❌ Número inválido. Debe empezar con 57 y tener entre 10-15 dígitos.\n\n_Ejemplo: 573001234567_\n\nIntenta de nuevo:'
+        );
+      }
+
+      // Check if that phone already has an appointment
+      const hasActive = await this.#appointmentRepository.hasActiveAppointment(cleanPhone);
+      if (hasActive) {
+        this.#conversationState.delete(phoneNumber);
+        this.#clearInactivityTimer(phoneNumber);
+        return this.#messagingService.sendButtonMessage(phoneNumber, {
+          body: `❌ El número ${cleanPhone} ya tiene una cita programada.\n\nNo se puede agendar otra cita para ese número.`,
+          buttons: [
+            { id: 'btn_menu', title: '📋 Menú principal' }
+          ]
+        });
+      }
+
+      // Save target phone and proceed to name
+      state.targetPhone = cleanPhone;
+      state.step = 'name';
+      this.#conversationState.set(phoneNumber, state);
+      
+      return this.#messagingService.sendMessage(
+        phoneNumber,
+        `✅ Número registrado: ${cleanPhone}\n\nAhora escribe el *nombre completo* de la persona:`
+      );
+    }
+
     if (state.step === 'name') {
       if (text.length < 2 || text.length > 100) {
         return this.#messagingService.sendMessage(
@@ -310,8 +395,9 @@ export class WebhookHandler {
     state.step = 'date';
     this.#conversationState.set(phoneNumber, state);
 
-    // Get availability for next 7 days
-    const datesWithAvailability = await this.#getAvailabilityForDates(state.barberId, 7);
+    // Get availability for today + next 7 days (8 days total)
+    // Uses Colombia timezone for date calculations
+    const datesWithAvailability = await this.#getAvailabilityForDates(state.barberId, 8);
     
     return this.#messagingService.sendDateSelection(phoneNumber, datesWithAvailability, state.barberName);
   }
@@ -331,11 +417,12 @@ export class WebhookHandler {
     state.step = 'time';
     this.#conversationState.set(phoneNumber, state);
 
-    // Get available slots for this date
+    // Get available slots for this date (uses Colombia timezone internally)
     const availableSlots = await this.#appointmentRepository.getAvailableSlots(state.barberId, selectedDate);
     
-    // Format date for display
+    // Format date for display using Colombia timezone
     const dateStr = selectedDate.toLocaleDateString('es-CO', {
+      timeZone: Barber.COLOMBIA_TIMEZONE,
       weekday: 'long',
       day: 'numeric',
       month: 'long'
@@ -363,7 +450,11 @@ export class WebhookHandler {
       );
     }
 
-    if (dateTime <= new Date()) {
+    // Compare with Colombia time
+    const nowColombia = Barber.getColombiaTime();
+    const dateTimeColombia = new Date(dateTime.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    
+    if (dateTimeColombia <= nowColombia) {
       this.#conversationState.delete(phoneNumber);
       this.#clearInactivityTimer(phoneNumber);
       return this.#messagingService.sendButtonMessage(phoneNumber, {
@@ -383,6 +474,7 @@ export class WebhookHandler {
       const availableSlots = await this.#appointmentRepository.getAvailableSlots(state.barberId, selectedDate);
       
       const dateStr = selectedDate.toLocaleDateString('es-CO', {
+        timeZone: Barber.COLOMBIA_TIMEZONE,
         weekday: 'long',
         day: 'numeric',
         month: 'long'
@@ -398,17 +490,43 @@ export class WebhookHandler {
 
     // Clear state before scheduling
     const barberName = state.barberName;
+    const targetPhone = state.targetPhone || phoneNumber;
+    const isForOther = !state.forSelf;
+    
     this.#conversationState.delete(phoneNumber);
     this.#clearInactivityTimer(phoneNumber);
     
-    await this.#scheduleAppointment.execute({
-      phoneNumber,
+    // Execute scheduling with target phone (could be different from sender)
+    // Skip active check if scheduling for another person (already validated in #startSchedulingForOther)
+    const appointment = await this.#scheduleAppointment.execute({
+      phoneNumber: targetPhone,
       customerName: state.customerName,
       barberId: state.barberId,
       barberName,
       serviceType: state.serviceType,
-      dateTime
+      dateTime,
+      skipActiveCheck: isForOther
     });
+
+    // If scheduled for another person, send confirmation to the person who booked
+    if (isForOther && appointment) {
+      const dateStr = dateTime.toLocaleDateString('es-CO', {
+        timeZone: Barber.COLOMBIA_TIMEZONE,
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      await this.#messagingService.sendButtonMessage(phoneNumber, {
+        header: '✅ Cita Agendada',
+        body: `Has agendado una cita para:\n\n👤 ${state.customerName}\n📱 ${targetPhone}\n📅 ${dateStr}\n💇 ${Appointment.getServiceTypeLabel(state.serviceType)}\n👤 Barbero: ${barberName}`,
+        buttons: [
+          { id: 'btn_menu', title: '📋 Menú principal' }
+        ]
+      });
+    }
   }
 
   async #getAvailabilityForDates(barberId, days) {
@@ -418,12 +536,14 @@ export class WebhookHandler {
     }
 
     const result = [];
-    const today = new Date();
+    // Use Colombia timezone for date calculations
+    const todayColombia = Barber.getColombiaTime();
+    todayColombia.setHours(0, 0, 0, 0);
     
-    for (let i = 1; i <= days; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
-      date.setHours(0, 0, 0, 0);
+    // Start from today (i = 0), not tomorrow
+    for (let i = 0; i < days; i++) {
+      const date = new Date(todayColombia);
+      date.setDate(todayColombia.getDate() + i);
       
       const allSlots = barber.generateTimeSlots(date);
       const bookedSlots = await this.#appointmentRepository.getBookedSlots(barberId, date);
@@ -431,11 +551,15 @@ export class WebhookHandler {
       
       const availableSlots = allSlots.filter(slot => !bookedTimes.has(slot.dateTime.getTime()));
       
-      result.push({
-        date,
-        availableSlots: availableSlots.length,
-        totalSlots: allSlots.length
-      });
+      // Only include days that have available slots
+      if (availableSlots.length > 0 || i > 0) {
+        result.push({
+          date,
+          availableSlots: availableSlots.length,
+          totalSlots: allSlots.length,
+          isToday: i === 0
+        });
+      }
     }
     
     return result;

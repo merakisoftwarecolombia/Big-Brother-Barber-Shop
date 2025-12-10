@@ -7,8 +7,14 @@ import { BarberPin } from '../value-objects/BarberPin.js';
  * Security:
  * - PIN is stored as a hash, never in plain text
  * - Alias is used for admin command identification
+ *
+ * Working Hours:
+ * - Default: 9 AM to 9 PM (Colombia time)
+ * - All time operations use Colombia timezone (UTC-5)
  */
 export class Barber {
+  static COLOMBIA_TIMEZONE = 'America/Bogota';
+  
   #id;
   #name;
   #alias;
@@ -26,7 +32,7 @@ export class Barber {
     this.#isActive = isActive;
     this.#workingHours = workingHours ?? {
       start: 9,  // 9 AM
-      end: 19,   // 7 PM
+      end: 21,   // 9 PM (extended hours)
       slotDuration: 60 // 1 hour per appointment
     };
   }
@@ -63,25 +69,44 @@ export class Barber {
   get workingHours() { return { ...this.#workingHours }; }
 
   /**
+   * Get current time in Colombia timezone
+   * @returns {Date}
+   */
+  static getColombiaTime() {
+    return new Date(new Date().toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+  }
+
+  /**
    * Generate all possible time slots for a given date
-   * @param {Date} date 
+   * Uses Colombia timezone for all comparisons
+   * @param {Date} date
    * @returns {Array<{time: string, dateTime: Date}>}
    */
   generateTimeSlots(date) {
     const slots = [];
     const { start, end, slotDuration } = this.#workingHours;
     
+    // Get current time in Colombia
+    const nowColombia = Barber.getColombiaTime();
+    const currentHour = nowColombia.getHours();
+    
+    // Check if the date is today in Colombia time
+    const dateColombia = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    const isToday = dateColombia.toDateString() === nowColombia.toDateString();
+    
     for (let hour = start; hour < end; hour++) {
+      // If today, only include future hours (current hour + 1 and beyond)
+      if (isToday && hour <= currentHour) {
+        continue;
+      }
+      
       const slotDate = new Date(date);
       slotDate.setHours(hour, 0, 0, 0);
       
-      // Only include future slots
-      if (slotDate > new Date()) {
-        slots.push({
-          time: `${hour.toString().padStart(2, '0')}:00`,
-          dateTime: new Date(slotDate)
-        });
-      }
+      slots.push({
+        time: `${hour.toString().padStart(2, '0')}:00`,
+        dateTime: new Date(slotDate)
+      });
     }
     
     return slots;

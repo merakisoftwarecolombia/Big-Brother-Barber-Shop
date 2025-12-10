@@ -1,9 +1,12 @@
 import { MessagingService } from '../../domain/ports/MessagingService.js';
 import { Appointment } from '../../domain/entities/Appointment.js';
+import { Barber } from '../../domain/entities/Barber.js';
 
 /**
  * WhatsApp Service - Infrastructure Layer
  * Implements WhatsApp Cloud API integration with interactive messages
+ *
+ * IMPORTANT: All date/time displays use Colombia timezone (UTC-5)
  */
 export class WhatsAppService extends MessagingService {
   #accessToken;
@@ -245,9 +248,10 @@ export class WhatsAppService extends MessagingService {
 
   /**
    * Send date selection with availability info
-   * @param {string} phoneNumber 
-   * @param {Array<{date: Date, availableSlots: number, totalSlots: number}>} datesWithAvailability 
-   * @param {string} barberName 
+   * Uses Colombia timezone for date display
+   * @param {string} phoneNumber
+   * @param {Array<{date: Date, availableSlots: number, totalSlots: number, isToday?: boolean}>} datesWithAvailability
+   * @param {string} barberName
    */
   async sendDateSelection(phoneNumber, datesWithAvailability, barberName) {
     const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -255,15 +259,25 @@ export class WhatsAppService extends MessagingService {
     
     const rows = datesWithAvailability
       .filter(d => d.availableSlots > 0)
-      .map(({ date, availableSlots }) => {
+      .map(({ date, availableSlots, isToday }) => {
         const dayName = dayNames[date.getDay()];
         const day = date.getDate();
         const month = monthNames[date.getMonth()];
-        const dateStr = date.toISOString().split('T')[0];
+        
+        // Format date string in YYYY-MM-DD format (Colombia time)
+        const year = date.getFullYear();
+        const monthNum = String(date.getMonth() + 1).padStart(2, '0');
+        const dayNum = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${monthNum}-${dayNum}`;
+        
+        // Show "HOY" for today's date
+        const title = isToday
+          ? `📅 HOY - ${dayName} ${day} ${month}`
+          : `${dayName} ${day} ${month}`;
         
         return {
           id: `date_${dateStr}`,
-          title: `${dayName} ${day} ${month}`,
+          title,
           description: `${availableSlots} horario${availableSlots > 1 ? 's' : ''} disponible${availableSlots > 1 ? 's' : ''}`
         };
       });
@@ -309,9 +323,13 @@ export class WhatsAppService extends MessagingService {
       });
     }
 
-    // Group by morning/afternoon
+    // Group by morning/afternoon/evening (extended hours until 9 PM)
     const morningSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) < 12);
-    const afternoonSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) >= 12);
+    const afternoonSlots = availableSlots.filter(s => {
+      const hour = parseInt(s.time.split(':')[0]);
+      return hour >= 12 && hour < 18;
+    });
+    const eveningSlots = availableSlots.filter(s => parseInt(s.time.split(':')[0]) >= 18);
     
     const sections = [];
     
@@ -320,7 +338,7 @@ export class WhatsAppService extends MessagingService {
         title: 'Mañana',
         rows: morningSlots.map(slot => {
           const hour = parseInt(slot.time.split(':')[0]);
-          const displayHour = hour > 12 ? hour - 12 : hour;
+          const displayHour = hour === 0 ? 12 : (hour > 12 ? hour - 12 : hour);
           const ampm = hour >= 12 ? 'PM' : 'AM';
           return {
             id: `time_${slot.time}`,
@@ -336,7 +354,22 @@ export class WhatsAppService extends MessagingService {
         rows: afternoonSlots.map(slot => {
           const hour = parseInt(slot.time.split(':')[0]);
           const displayHour = hour > 12 ? hour - 12 : hour;
-          const ampm = hour >= 12 ? 'PM' : 'AM';
+          const ampm = 'PM';
+          return {
+            id: `time_${slot.time}`,
+            title: `${displayHour}:00 ${ampm}`
+          };
+        })
+      });
+    }
+
+    if (eveningSlots.length > 0) {
+      sections.push({
+        title: 'Noche',
+        rows: eveningSlots.map(slot => {
+          const hour = parseInt(slot.time.split(':')[0]);
+          const displayHour = hour > 12 ? hour - 12 : hour;
+          const ampm = 'PM';
           return {
             id: `time_${slot.time}`,
             title: `${displayHour}:00 ${ampm}`
@@ -354,7 +387,9 @@ export class WhatsAppService extends MessagingService {
   }
 
   async sendConfirmation(phoneNumber, appointment, barberName) {
+    // Use Colombia timezone for date display
     const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
+      timeZone: Barber.COLOMBIA_TIMEZONE,
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -376,7 +411,9 @@ export class WhatsAppService extends MessagingService {
   }
 
   async sendAppointmentDetails(phoneNumber, appointment, barberName) {
+    // Use Colombia timezone for date display
     const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
+      timeZone: Barber.COLOMBIA_TIMEZONE,
       weekday: 'long',
       day: 'numeric',
       month: 'long',
@@ -397,7 +434,9 @@ export class WhatsAppService extends MessagingService {
   }
 
   async sendReminder(phoneNumber, appointment, barberName) {
+    // Use Colombia timezone for date display
     const dateStr = appointment.dateTime.toLocaleDateString('es-CO', {
+      timeZone: Barber.COLOMBIA_TIMEZONE,
       weekday: 'long',
       month: 'long',
       day: 'numeric',

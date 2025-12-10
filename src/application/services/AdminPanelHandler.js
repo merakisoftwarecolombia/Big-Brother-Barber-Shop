@@ -1,10 +1,13 @@
 import { AdminCommand } from '../../domain/value-objects/AdminCommand.js';
 import { Appointment } from '../../domain/entities/Appointment.js';
+import { Barber } from '../../domain/entities/Barber.js';
 
 /**
  * AdminPanelHandler - Application Service
  * Orchestrates admin panel with interactive WhatsApp messages
- * 
+ *
+ * IMPORTANT: All date/time operations use Colombia timezone (UTC-5)
+ *
  * Flow:
  * 1. Barber sends "admin <alias> <pin>" to authenticate
  * 2. System shows interactive menu with buttons/lists
@@ -397,16 +400,25 @@ export class AdminPanelHandler {
     const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
     const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
     const rows = [];
-    const today = new Date();
+    
+    // Use Colombia timezone for date calculations
+    const todayColombia = Barber.getColombiaTime();
+    todayColombia.setHours(0, 0, 0, 0);
 
     for (let i = 0; i <= 7; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
+      const date = new Date(todayColombia);
+      date.setDate(todayColombia.getDate() + i);
       
       const dayName = dayNames[date.getDay()];
       const day = date.getDate();
       const month = monthNames[date.getMonth()];
-      const dateStr = date.toISOString().split('T')[0];
+      
+      // Format date string in YYYY-MM-DD format
+      const year = date.getFullYear();
+      const monthNum = String(date.getMonth() + 1).padStart(2, '0');
+      const dayNum = String(date.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${monthNum}-${dayNum}`;
+      
       const isToday = i === 0;
       
       rows.push({
@@ -456,7 +468,9 @@ export class AdminPanelHandler {
     message += `📊 Total: ${activeAppointments.length} cita${activeAppointments.length !== 1 ? 's' : ''}\n\n`;
 
     for (const apt of activeAppointments.sort((a, b) => a.dateTime - b.dateTime)) {
+      // Use Colombia timezone for time display
       const time = apt.dateTime.toLocaleTimeString('es-CO', {
+        timeZone: Barber.COLOMBIA_TIMEZONE,
         hour: '2-digit',
         minute: '2-digit'
       });
@@ -480,16 +494,25 @@ export class AdminPanelHandler {
     const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
     const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
     const rows = [];
-    const today = new Date();
+    
+    // Use Colombia timezone for date calculations
+    const todayColombia = Barber.getColombiaTime();
+    todayColombia.setHours(0, 0, 0, 0);
 
     for (let i = 0; i <= 7; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
+      const date = new Date(todayColombia);
+      date.setDate(todayColombia.getDate() + i);
       
       const dayName = dayNames[date.getDay()];
       const day = date.getDate();
       const month = monthNames[date.getMonth()];
-      const dateStr = date.toISOString().split('T')[0];
+      
+      // Format date string in YYYY-MM-DD format
+      const year = date.getFullYear();
+      const monthNum = String(date.getMonth() + 1).padStart(2, '0');
+      const dayNum = String(date.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${monthNum}-${dayNum}`;
+      
       const isToday = i === 0;
       
       rows.push({
@@ -516,20 +539,24 @@ export class AdminPanelHandler {
     const { start, end } = barber.workingHours;
     const rows = [];
     const date = new Date(dateStr + 'T12:00:00');
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
+    
+    // Use Colombia timezone for comparisons
+    const nowColombia = Barber.getColombiaTime();
+    const dateColombia = new Date(date.toLocaleString('en-US', { timeZone: Barber.COLOMBIA_TIMEZONE }));
+    const isToday = dateColombia.toDateString() === nowColombia.toDateString();
+    const currentHour = nowColombia.getHours();
 
     const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const dayName = dayNames[date.getDay()];
     const day = date.getDate();
 
     for (let hour = start; hour < end; hour++) {
-      // Skip past hours if today
-      if (isToday && hour <= now.getHours()) {
+      // Skip past hours if today (using Colombia time)
+      if (isToday && hour <= currentHour) {
         continue;
       }
       
-      const displayHour = hour > 12 ? hour - 12 : hour;
+      const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
       const ampm = hour >= 12 ? 'PM' : 'AM';
       
       rows.push({
@@ -564,7 +591,12 @@ export class AdminPanelHandler {
   }
 
   async #handleTodayAppointments(phoneNumber, barber) {
-    const today = new Date().toISOString().split('T')[0];
+    // Use Colombia timezone for today's date
+    const todayColombia = Barber.getColombiaTime();
+    const year = todayColombia.getFullYear();
+    const month = String(todayColombia.getMonth() + 1).padStart(2, '0');
+    const day = String(todayColombia.getDate()).padStart(2, '0');
+    const today = `${year}-${month}-${day}`;
     await this.#handleAppointmentsForDate(phoneNumber, barber, today);
   }
 
